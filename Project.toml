@@ -1,0 +1,15 @@
+name = "HydroSiennaPRASInterface"
+uuid = "d5d6a0e5-9c8b-4e6f-8c8e-9e5f5c5d5c5d"
+authors = ["NREL-Sienna"]
+version = "0.1.0"
+
+[deps]
+
+[compat]
+julia = "1.6"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
