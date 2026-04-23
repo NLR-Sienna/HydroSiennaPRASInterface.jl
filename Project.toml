@@ -1,12 +1,16 @@
 name = "HydroSiennaPRASInterface"
 uuid = "d5d6a0e5-9c8b-4e6f-8c8e-9e5f5c5d5c5d"
-authors = ["NREL-Sienna"]
+authors = ["Surya Chandan Dhulipala <suryachandan.dhulipala@nrel.gov>", "Abdelrahman Ayad <Abdelrahman.Ayad@nlr.gov>"]
 version = "0.1.0"
 
 [deps]
+HydroPowerSimulations = "fc1677e0-6ad7-4515-bf3a-bd6bf20a0b1b"
+SiennaPRASInterface = "4b496c86-8d00-441d-b504-079c710e0aa7"
 
 [compat]
-julia = "1.10"
+HydroPowerSimulations = "0.11.1"
+SiennaPRASInterface = "1.0.2"
+julia = "^1.8"
 
 [extras]
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
