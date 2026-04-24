@@ -1,15 +1,29 @@
 name = "HydroSiennaPRASInterface"
 uuid = "d5d6a0e5-9c8b-4e6f-8c8e-9e5f5c5d5c5d"
-authors = ["Surya Chandan Dhulipala <suryachandan.dhulipala@nrel.gov>", "Abdelrahman Ayad <Abdelrahman.Ayad@nlr.gov>"]
 version = "0.1.0"
+authors = ["Surya Chandan Dhulipala <suryachandan.dhulipala@nrel.gov>", "Abdelrahman Ayad <Abdelrahman.Ayad@nlr.gov>"]
 
 [deps]
+HiGHS = "87dc4568-4c63-4d18-b0c0-bb2238e4078b"
 HydroPowerSimulations = "fc1677e0-6ad7-4515-bf3a-bd6bf20a0b1b"
+InfrastructureSystems = "2cd47ed4-ca9b-11e9-27f2-ab636a7671f1"
+PowerFlows = "94fada2c-fd9a-4e89-8d82-81405f5cb4f6"
+PowerNetworkMatrices = "bed98974-b02a-5e2f-9fe0-a103f5c450dd"
+PowerSimulations = "e690365d-45e2-57bb-ac84-44ba829e73c4"
+PowerSystems = "bcd98974-b02a-5e2f-9ee0-a103f5c450dd"
 SiennaPRASInterface = "4b496c86-8d00-441d-b504-079c710e0aa7"
+TimeSeries = "9e3dc215-6440-5c97-bce1-76c03772f85e"
 
 [compat]
-HydroPowerSimulations = "0.11.1"
+HiGHS = "1.20.1"
+HydroPowerSimulations = "0.15"
+InfrastructureSystems = "3.5.1"
+PowerFlows = "0.16.3"
+PowerNetworkMatrices = "0.20.0"
+PowerSimulations = "0.34.2"
+PowerSystems = "5.9.1"
 SiennaPRASInterface = "1.0.2"
+TimeSeries = "0.25.1"
 julia = "^1.8"
 
 [extras]
