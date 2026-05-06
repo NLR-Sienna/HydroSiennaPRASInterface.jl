@@ -92,7 +92,7 @@ if isdefined(SPI, :EnergyReservoirSoC)
 end
 
 """
-    extract_hydro_inflow_from_simulation(system::PSY.System; template=nothing, optimizer=HiGHS.Optimizer)
+    (system::PSY.System; template=nothing, optimizer=HiGHS.Optimizer)
 
 Run a UC simulation to extract hydro active power data for use as inflow time series in multi-stage RA planning.
 
@@ -102,8 +102,9 @@ Run a UC simulation to extract hydro active power data for use as inflow time se
 - `optimizer`: Optimizer for UC problem (default: HiGHS.Optimizer)
 
 # Returns
-- `Dict{String, Matrix{Float64}}`: Dictionary mapping hydro component names to their active power time series.
-  Each value is a matrix with columns [timestamp, component1_power, component2_power, ...]
+- `Dict{String, Any}`: Dictionary mapping hydro component categories to extracted inflow payloads.
+    `HydroDispatch` and `HydroReservoir` are returned as `DataFrame`s with one column per
+    component (column names are component names).
 
 # Example
 ```julia
@@ -116,85 +117,264 @@ function extract_hydro_inflow_from_simulation(
     template::Union{Nothing, PSI.ProblemTemplate}=nothing,
     optimizer=HiGHS.Optimizer,
 )
-    # Create default UC template if not provided
-    if isnothing(template)
-        template = PSI.ProblemTemplate(PSI.CopperPlatePowerModel)
-        PSI.set_device_model!(template, PSY.ThermalStandard, PSI.ThermalBasicUnitCommitment)
-        PSI.set_device_model!(template, PSY.PowerLoad, PSI.StaticPowerLoad)
-        if isdefined(PSY, :HydroDispatch)
-            PSI.set_device_model!(template, PSY.HydroDispatch, HPS.HydroDispatchRunOfRiver)
-        end
-        if isdefined(PSY, :HydroEnergyReservoir)
-            PSI.set_device_model!(template, PSY.HydroEnergyReservoir, HPS.HydroCommitmentReservoirStorage)
+    working_system = system
+
+    has_forecast_data = try
+        !isempty(PSY.get_forecast_initial_times(system))
+    catch
+        false
+    end
+
+    if !has_forecast_data && isdefined(PSY, :transform_single_time_series!)
+        working_system = deepcopy(system)
+        try
+            PSY.transform_single_time_series!(working_system, Week(25), Week(1))
+        catch e
+            @debug "Failed to transform single time series to deterministic forecasts for hydro planning" exception=(e, catch_backtrace())
         end
     end
 
+    function _component_count(component_type)
+        if !isdefined(PSY, component_type)
+            return 0
+        end
+        return length(collect(PSY.get_components(getfield(PSY, component_type), working_system)))
+    end
+
+    function _set_device_model_if_components!(template_obj, component_type, formulation)
+        if _component_count(component_type) > 0
+            PSI.set_device_model!(template_obj, getfield(PSY, component_type), formulation)
+        end
+    end
+
+    # Create default UC template if not provided
+    if isnothing(template)
+        template = PSI.ProblemTemplate(PSI.NetworkModel(PSI.CopperPlatePowerModel; use_slacks = true))
+
+        _set_device_model_if_components!(template, :ThermalStandard, PSI.ThermalDispatchNoMin)
+        _set_device_model_if_components!(template, :RenewableDispatch, PSI.RenewableFullDispatch)
+        _set_device_model_if_components!(template, :RenewableNonDispatch, PSI.FixedOutput)
+        _set_device_model_if_components!(template, :StandardLoad, PSI.StaticPowerLoad)
+        _set_device_model_if_components!(template, :PowerLoad, PSI.StaticPowerLoad)
+
+        if _component_count(:HydroReservoir) > 0
+            reservoir_model = PSI.DeviceModel(
+                PSY.HydroReservoir,
+                HPS.HydroWaterModelReservoir;
+                attributes = Dict("hydro_target" => true, "hydro_budget" => false),
+            )
+            PSI.set_device_model!(template, reservoir_model)
+        end
+
+        if _component_count(:HydroTurbine) > 0
+            PSI.set_device_model!(template, PSY.HydroTurbine, HPS.HydroTurbineWaterLinearCommitment)
+        end
+
+        if _component_count(:HydroDispatch) > 0
+            PSI.set_device_model!(template, PSY.HydroDispatch, HPS.HydroDispatchRunOfRiver)
+        end
+        #TODO: other type of components might need to be set for device model
+
+    end
+
     # Build and execute UC simulation
-    models = PSI.SimulationModels([
-        PSI.DecisionModel(
-            template,
-            system;
-            name = "HydroPlanning",
-            initialize_model = false,
-            system_to_file = false,
-            optimizer = optimizer,
-        ),
-    ])
+    model = PSI.DecisionModel(
+        template,
+        working_system;
+        name = "HydroPlanning",
+        initialize_model = false,
+        optimizer = optimizer,
+    )
+
+    models = PSI.SimulationModels(; decision_models = [model])
 
     sequence = PSI.SimulationSequence(;
         models = models,
         ini_cond_chronology = PSI.InterProblemChronology(),
     )
 
+    sim_initial_time = begin
+        try
+            available_times = PSY.get_forecast_initial_times(working_system)
+            isempty(available_times) ? DateTime("2020-01-01T00:00:00") : first(available_times)
+        catch
+            DateTime("2020-01-01T00:00:00")
+        end
+    end
+
+    sim_steps = begin
+        try
+            available_times = PSY.get_forecast_initial_times(working_system)
+            isempty(available_times) ? 52 : max(1, min(52, length(available_times)))
+        catch
+            52
+        end
+    end
+
     sim = PSI.Simulation(;
         name = "hydro_planning_sim",
-        steps = 1,
+        steps = sim_steps,
         models = models,
+        initial_time = sim_initial_time,
         sequence = sequence,
         simulation_folder = mktempdir(; cleanup = true),
     )
 
     @info "Building UC simulation for hydro planning..."
-    PSI.build!(sim; serialize = false)
+    PSI.build!(sim)
 
     @info "Executing UC simulation for hydro planning..."
     PSI.execute!(sim; enable_progress_bar = false)
 
     results = PSI.SimulationResults(sim; ignore_status = true)
     r = PSI.get_decision_problem_results(results, "HydroPlanning")
-
     # Extract realized variables into a dict
-    inflow_dict = Dict{String, Matrix{Float64}}()
+    inflow_dict = Dict{String, Any}()
 
-    # HydroDispatch active power
-    if isdefined(PSY, :HydroDispatch)
+    function _extract_variable_dataframe(variable_name::String; aux::Bool=false)
         try
-            hy_dispatch_df = PSI.read_realized_variable(r, "ActivePowerVariable__HydroDispatch")
-            # Convert to matrix, excluding timestamp column (column 1) 
-            inflow_dict["HydroDispatch"] = Matrix(hy_dispatch_df[!, 2:end])
-            @info "Extracted $(size(hy_dispatch_df, 2)-1) HydroDispatch components from UC results"
+            return aux ? PSI.read_realized_aux_variable(r, variable_name) :
+                   PSI.read_realized_variable(r, variable_name)
         catch e
-            @warn "Could not extract HydroDispatch data: $(e)"
+            @debug "Could not extract dataframe for $(variable_name)" exception=(e, catch_backtrace())
+            return nothing
         end
     end
 
-    # HydroEnergyReservoir active power
-    if isdefined(PSY, :HydroEnergyReservoir)
-        try
-            hy_reservoir_df = PSI.read_realized_variable(r, "ActivePowerVariable__HydroEnergyReservoir")
-            # Convert to matrix, excluding timestamp column (column 1)
-            inflow_dict["HydroEnergyReservoir"] = Matrix(hy_reservoir_df[!, 2:end])
-            @info "Extracted $(size(hy_reservoir_df, 2)-1) HydroEnergyReservoir components from UC results"
-        catch e
-            @warn "Could not extract HydroEnergyReservoir data: $(e)"
+    function _extract_numeric_component_columns(df::DataFrame)
+        if size(df, 2) < 2
+            return String[], Vector{Vector{Float64}}()
         end
+
+        numeric_col_names = String[]
+        numeric_col_vectors = Vector{Vector{Float64}}()
+        for col in names(df)[2:end]
+            try
+                values = Float64.(df[!, col])
+                push!(numeric_col_names, String(col))
+                push!(numeric_col_vectors, values)
+            catch e
+                @debug "Skipping non-numeric UC results column $(col)" exception=(e, catch_backtrace())
+            end
+        end
+
+        return numeric_col_names, numeric_col_vectors
+    end
+
+    function _extract_series_to_matrix!(dict_obj::Dict{String, Any}, key::String, variable_name::String; aux::Bool=false)
+        try
+            var_df = _extract_variable_dataframe(variable_name; aux=aux)
+            if isnothing(var_df)
+                return false
+            end
+            numeric_col_names, numeric_col_vectors = _extract_numeric_component_columns(var_df)
+            if !isempty(numeric_col_vectors)
+                if key == "HydroDispatch"
+                    component_df = DataFrame()
+                    for (name, values) in zip(numeric_col_names, numeric_col_vectors)
+                        component_df[!, Symbol(name)] = values
+                    end
+                    dict_obj[key] = component_df
+                else
+                    dict_obj[key] = hcat(numeric_col_vectors...)
+                end
+                @info "Extracted $(length(numeric_col_names)) $(key) components from UC results ($(variable_name))"
+            end
+            return true
+        catch e
+            @debug "Could not extract $(key) from $(variable_name)" exception=(e, catch_backtrace())
+            return false
+        end
+    end
+
+    # Short-term hydro component outputs
+    _extract_series_to_matrix!(inflow_dict, "HydroDispatch", "ActivePowerVariable__HydroDispatch")
+
+    # HydroReservoir inflow: aggregate upstream turbine active power by reservoir
+    if isdefined(PSY, :HydroReservoir)
+        reservoir_list = collect(PSY.get_components(PSY.HydroReservoir, working_system))
+        if !isempty(reservoir_list)
+            turbine_var_df = _extract_variable_dataframe("ActivePowerVariable__HydroTurbine")
+
+            turbine_to_reservoir_map = Dict{String, String}()
+            for reservoir in reservoir_list
+                upstream_turbines = if isdefined(PSY, :HydroTurbine) &&
+                                       hasproperty(reservoir, :upstream_turbines) &&
+                                       !isempty(reservoir.upstream_turbines)
+                    reservoir.upstream_turbines
+                else
+                    []
+                end
+                for turbine in upstream_turbines
+                    turbine_to_reservoir_map[PSY.get_name(turbine)] = PSY.get_name(reservoir)
+                end
+            end
+
+            if !isnothing(turbine_var_df) && size(turbine_var_df, 2) >= 2 && !isempty(turbine_to_reservoir_map)
+                turbine_long_df = DataFrame(:DateTime => DateTime[], :name => String[], :value => Float64[])
+                lower_names = lowercase.(String.(names(turbine_var_df)))
+                dt_idx = findfirst(x -> x in ("datetime", "timestamp", "time"), lower_names)
+                name_idx = findfirst(==("name"), lower_names)
+                value_idx = findfirst(==("value"), lower_names)
+
+                if !isnothing(dt_idx) && !isnothing(name_idx) && !isnothing(value_idx)
+                    dt_col = names(turbine_var_df)[dt_idx]
+                    name_col = names(turbine_var_df)[name_idx]
+                    val_col = names(turbine_var_df)[value_idx]
+                    turbine_long_df = DataFrame(
+                        :DateTime => DateTime.(turbine_var_df[!, dt_col]),
+                        :name => String.(turbine_var_df[!, name_col]),
+                        :value => Float64.(turbine_var_df[!, val_col]),
+                    )
+                else
+                    dt_col = isnothing(dt_idx) ? nothing : names(turbine_var_df)[dt_idx]
+                    timestamps = if isnothing(dt_col)
+                        collect(sim_initial_time:Week(1):(sim_initial_time + Week(size(turbine_var_df, 1) - 1)))
+                    else
+                        DateTime.(turbine_var_df[!, dt_col])
+                    end
+
+                    excluded_cols = isnothing(dt_col) ? Symbol[] : [dt_col]
+                    numeric_cols = [
+                        col for col in names(turbine_var_df)
+                        if !(col in excluded_cols) && eltype(turbine_var_df[!, col]) <: Number
+                    ]
+
+                    rows = NamedTuple{(:DateTime, :name, :value), Tuple{DateTime, String, Float64}}[]
+                    for turbine_col in numeric_cols
+                        values = Float64.(turbine_var_df[!, turbine_col])
+                        append!(rows, (DateTime = timestamps[i], name = String(turbine_col), value = values[i]) for i in eachindex(values))
+                    end
+                    turbine_long_df = DataFrame(rows)
+                end
+
+                if !isempty(turbine_long_df)
+                    turbine_long_df.reservoir = [get(turbine_to_reservoir_map, n, missing) for n in turbine_long_df.name]
+                    turbine_long_df = DataFrames.dropmissing(turbine_long_df, :reservoir)
+
+                    if !isempty(turbine_long_df)
+                        df_agg = DataFrames.combine(
+                            DataFrames.groupby(turbine_long_df, [:DateTime, :reservoir]),
+                            :value => sum => :value,
+                        )
+                        reservoir_df = DataFrames.unstack(df_agg, :DateTime, :reservoir, :value, fill=0.0)
+                        inflow_dict["HydroReservoir"] = DataFrames.sort(reservoir_df, :DateTime)
+                        @info "Extracted inflow data for $(length(unique(turbine_long_df.reservoir))) HydroReservoir component(s): $(size(reservoir_df, 1)) time steps"
+                    end
+                end
+            end
+        end
+    end
+
+    if isempty(inflow_dict)
+        @warn "No hydro variables were extracted from the HydroPlanning simulation results"
     end
 
     return inflow_dict
 end
 
 """
-    apply_hydro_inflow_to_system!(system::PSY.System, hydro_inflow_data::Dict{String, Matrix{Float64}}; time_series_name::String="inflow")
+    apply_hydro_inflow_to_system!(system::PSY.System, hydro_inflow_data::Dict{String, Any}; time_series_name::String="inflow")
 
 Apply extracted hydro inflow data to a system by creating and attaching time series to components.
 This integrates with SiennaPRASInterface's PRAS conversion pipeline, which expects time series
@@ -202,7 +382,7 @@ with the name specified in the HydroEnergyReservoirPRAS formulation (default: "i
 
 # Arguments
 - `system::PSY.System`: System to modify (mutated in place)
-- `hydro_inflow_data::Dict{String, Matrix{Float64}}`: Output from `extract_hydro_inflow_from_simulation`
+- `hydro_inflow_data::Dict{String, Any}`: Output from `extract_hydro_inflow_from_simulation`
 - `time_series_name::String`: Name for the time series (default: "inflow", must match HydroEnergyReservoirPRAS formulation)
 
 # Returns
@@ -217,8 +397,9 @@ apply_hydro_inflow_to_system!(sys, hydro_data)
 """
 function apply_hydro_inflow_to_system!(
     system::PSY.System,
-    hydro_inflow_data::Dict{String, Matrix{Float64}};
+    hydro_inflow_data::Dict{String, Any};
     time_series_name::String="inflow",
+    hydro_dispatch_time_series_name::String="max_active_power",
 )
     if isempty(hydro_inflow_data)
         @warn "No hydro inflow data provided"
@@ -315,30 +496,50 @@ function apply_hydro_inflow_to_system!(
     
     # Process HydroDispatch components
     if haskey(hydro_inflow_data, "HydroDispatch") && isdefined(PSY, :HydroDispatch)
-        inflow_matrix = hydro_inflow_data["HydroDispatch"]
+        inflow_payload = hydro_inflow_data["HydroDispatch"]
         hydro_dispatch_list = collect(PSY.get_components(PSY.HydroDispatch, system))
-        n_components = min(size(inflow_matrix, 2), length(hydro_dispatch_list))
+        dispatch_inflow_by_name = Dict{String, Vector{Float64}}()
+
+        if inflow_payload isa DataFrame
+            for col in names(inflow_payload)
+                dispatch_inflow_by_name[String(col)] = Float64.(inflow_payload[!, col])
+            end
+        elseif inflow_payload isa Matrix{Float64}
+            n_components_fallback = min(size(inflow_payload, 2), length(hydro_dispatch_list))
+            for (i, component) in enumerate(hydro_dispatch_list[1:n_components_fallback])
+                dispatch_inflow_by_name[PSY.get_name(component)] = inflow_payload[:, i]
+            end
+        else
+            @warn "HydroDispatch inflow payload has unsupported type $(typeof(inflow_payload)); skipping dispatch inflow application"
+        end
+
+        n_components = count(c -> haskey(dispatch_inflow_by_name, PSY.get_name(c)), hydro_dispatch_list)
         
         if n_components > 0
             @info "Attaching inflow time series to $(n_components) HydroDispatch components"
-            for (i, component) in enumerate(hydro_dispatch_list[1:n_components])
-                data = inflow_matrix[:, i]
+            for component in hydro_dispatch_list
+                component_name = PSY.get_name(component)
+                if !haskey(dispatch_inflow_by_name, component_name)
+                    continue
+                end
+
+                data = dispatch_inflow_by_name[component_name]
                 timestamps = _build_timestamps(length(data))
                 ts_df = DataFrame(
                     :timestamp => timestamps,
-                    Symbol(time_series_name) => data,
+                    Symbol(hydro_dispatch_time_series_name) => data,
                 )
                 target_df = ts_df
-                if PSY.has_time_series(component, PSY.SingleTimeSeries, time_series_name)
-                    existing_ts = PSY.get_time_series(PSY.SingleTimeSeries, component, time_series_name)
-                    existing_df = _to_series_dataframe(PSY.get_data(existing_ts), time_series_name)
+                if PSY.has_time_series(component, PSY.SingleTimeSeries, hydro_dispatch_time_series_name)
+                    existing_ts = PSY.get_time_series(PSY.SingleTimeSeries, component, hydro_dispatch_time_series_name)
+                    existing_df = _to_series_dataframe(PSY.get_data(existing_ts), hydro_dispatch_time_series_name)
 
                     full_match =
                         size(existing_df, 1) == size(ts_df, 1) &&
                         all(existing_df.timestamp .== ts_df.timestamp)
 
                     if !full_match
-                        merged_df, replaced = _merge_matching_timestamps(existing_df, ts_df, time_series_name)
+                        merged_df, replaced = _merge_matching_timestamps(existing_df, ts_df, hydro_dispatch_time_series_name)
                         if replaced == 0
                             @warn "No matching timestamps found for $(PSY.get_name(component)); keeping original series"
                             continue
@@ -347,29 +548,80 @@ function apply_hydro_inflow_to_system!(
                         target_df = merged_df
                     end
 
-                    if !_remove_existing_single_time_series!(component)
+                    local function _remove_existing_dispatch_series!(component)
+                        if !PSY.has_time_series(component, PSY.SingleTimeSeries, hydro_dispatch_time_series_name)
+                            return true
+                        end
+                        try
+                            PSY.remove_time_series!(system, PSY.SingleTimeSeries, component, hydro_dispatch_time_series_name)
+                        catch e
+                            @warn "Could not remove existing $(hydro_dispatch_time_series_name) series on $(PSY.get_name(component))" exception=(e, catch_backtrace())
+                            return false
+                        end
+                        return !PSY.has_time_series(component, PSY.SingleTimeSeries, hydro_dispatch_time_series_name)
+                    end
+
+                    if !_remove_existing_dispatch_series!(component)
                         @warn "Skipping replacement for $(PSY.get_name(component)) because existing series could not be removed"
                         continue
                     end
                 end
-                ts = PSY.SingleTimeSeries(time_series_name, target_df)
+                ts = PSY.SingleTimeSeries(hydro_dispatch_time_series_name, target_df)
                 PSY.add_time_series!(system, component, ts)
-                @debug "Added $(time_series_name) time series to $(PSY.get_name(component))"
+                @debug "Added $(hydro_dispatch_time_series_name) time series to $(PSY.get_name(component))"
             end
         end
     end
 
-    # Process HydroEnergyReservoir components
-    if haskey(hydro_inflow_data, "HydroEnergyReservoir") && isdefined(PSY, :HydroEnergyReservoir)
-        inflow_matrix = hydro_inflow_data["HydroEnergyReservoir"]
-        hydro_reservoir_list = collect(PSY.get_components(PSY.HydroEnergyReservoir, system))
-        n_components = min(size(inflow_matrix, 2), length(hydro_reservoir_list))
-        
+   
+
+    # Process HydroReservoir components (medium-term formulation)
+    if haskey(hydro_inflow_data, "HydroReservoir") && isdefined(PSY, :HydroReservoir)
+        inflow_payload = hydro_inflow_data["HydroReservoir"]
+        hydro_reservoir_list = collect(PSY.get_components(PSY.HydroReservoir, system))
+
+        reservoir_inflow_by_name = Dict{String, Vector{Float64}}()
+        reservoir_payload_timestamps = DateTime[]
+        if inflow_payload isa DataFrame
+            ts_col_idx = findfirst(c -> lowercase(String(c)) in ("datetime", "timestamp", "time"), names(inflow_payload))
+            if !isnothing(ts_col_idx)
+                ts_col = names(inflow_payload)[ts_col_idx]
+                reservoir_payload_timestamps = DateTime.(inflow_payload[!, ts_col])
+            end
+            for col in names(inflow_payload)
+                if lowercase(String(col)) in ("datetime", "timestamp", "time")
+                    continue
+                end
+                reservoir_inflow_by_name[String(col)] = Float64.(inflow_payload[!, col])
+            end
+        elseif inflow_payload isa Matrix{Float64}
+            n_components_fallback = min(size(inflow_payload, 2), length(hydro_reservoir_list))
+            for (i, component) in enumerate(hydro_reservoir_list[1:n_components_fallback])
+                reservoir_inflow_by_name[PSY.get_name(component)] = inflow_payload[:, i]
+            end
+        else
+            @warn "HydroReservoir inflow payload has unsupported type $(typeof(inflow_payload)); skipping reservoir inflow application"
+        end
+
+        n_components = count(c -> haskey(reservoir_inflow_by_name, PSY.get_name(c)), hydro_reservoir_list)
         if n_components > 0
-            @info "Attaching inflow time series to $(n_components) HydroEnergyReservoir components"
-            for (i, component) in enumerate(hydro_reservoir_list[1:n_components])
-                data = inflow_matrix[:, i]
-                timestamps = _build_timestamps(length(data))
+            @info "Attaching inflow time series to $(n_components) HydroReservoir components"
+            for component in hydro_reservoir_list
+                component_name = PSY.get_name(component)
+                if !haskey(reservoir_inflow_by_name, component_name)
+                    continue
+                end
+
+                data = reservoir_inflow_by_name[component_name]
+                if all(isnan, data)
+                    @debug "Skipping HydroReservoir inflow replacement for $(PSY.get_name(component)); no connected upstream HydroTurbine data"
+                    continue
+                end
+                timestamps = if !isempty(reservoir_payload_timestamps) && length(reservoir_payload_timestamps) == length(data)
+                    reservoir_payload_timestamps
+                else
+                    _build_timestamps(length(data))
+                end
                 ts_df = DataFrame(
                     :timestamp => timestamps,
                     Symbol(time_series_name) => data,

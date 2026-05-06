@@ -10,9 +10,9 @@ using Statistics
 const PSI = PowerSimulations
 const PSY = PowerSystems
 
-cur_dir = (@__DIR__)
+scripts_dir = @__DIR__
+cur_dir = dirname(scripts_dir)
 model_dir = joinpath(cur_dir, "models")
-scripts_dir = joinpath(cur_dir, "scripts")
 include(joinpath(scripts_dir, "hydro_dev_utils.jl"))
 
 weekly_sys = PSY.System(joinpath(model_dir, "sys_weekly.json"))
@@ -112,3 +112,7 @@ results_uc = get_decision_problem_results(results, "UC")
 
 all_variable_results = read_realized_variables(results_uc)
 all_parameter_results = read_realized_parameters(results_uc)
+df = all_variable_results["ActivePowerVariable__HydroTurbine"]
+
+
+hy_res = get_components(HydroReservoir, sys) |> collect

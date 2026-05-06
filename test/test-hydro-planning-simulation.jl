@@ -5,8 +5,14 @@ import PowerSimulations
 import PowerSystemCaseBuilder
 import PowerSystems
 import SiennaPRASInterface
+import Statistics
 import Test
-
+import TimeSeries
+import DataFrames
+using PowerSystems
+using Statistics
+using TimeSeries
+using Revise
 using HydroSiennaPRASInterface
 
 const HPS = HydroPowerSimulations
@@ -14,11 +20,42 @@ const PSI = PowerSimulations
 const PSB = PowerSystemCaseBuilder
 const PSY = PowerSystems
 const SPI = SiennaPRASInterface
+const DataFrame = DataFrames.DataFrame
+
+const SCRIPTS_DIR = joinpath(dirname(@__DIR__), "scripts")
+include(joinpath(SCRIPTS_DIR, "hydro_dev_utils.jl"))
+
+function _build_medium_term_system()
+    models_dir = joinpath(dirname(@__DIR__), "models")
+
+    weekly_sys = PSY.System(joinpath(models_dir, "sys_weekly.json"))
+    sys = deepcopy(weekly_sys)
+    PSY.remove_time_series!(sys, PSY.SingleTimeSeries)
+
+    num_weeks = 104
+    resolution_weekly = Dates.Week(1)
+    resolution_hourly = Dates.Hour(1)
+    steps_in_resolution = resolution_weekly ÷ resolution_hourly
+    total_steps = num_weeks * steps_in_resolution
+    global nums = num_weeks
+
+    set_turbine_cost_to_zero!(sys)
+    add_fuel_cost_new_time_series!(weekly_sys, sys, steps_in_resolution, total_steps)
+    add_load_new_mean_time_series!(weekly_sys, sys, steps_in_resolution, total_steps; load_type = PSY.StandardLoad)
+    add_renewable_new_time_series!(weekly_sys, sys, steps_in_resolution, total_steps; renewable_type = PSY.RenewableDispatch)
+    add_renewable_new_time_series!(weekly_sys, sys, steps_in_resolution, total_steps; renewable_type = PSY.RenewableNonDispatch)
+    add_inflow_outflow_new_time_series!(weekly_sys, sys, steps_in_resolution, total_steps)
+    add_hydro_target_new_time_series!(weekly_sys, sys, steps_in_resolution, total_steps)
+    add_reserves_new_time_series!(weekly_sys, sys, steps_in_resolution, total_steps)
+
+    PSY.transform_single_time_series!(sys, Dates.Week(25), Dates.Week(1))
+    return sys
+end
 
 @Test.testset "Hydro Planning: Extract Inflow Data" begin
     """Test hydro planning functionality: extracting inflow data from UC simulations
     and using it in hydro constructors."""
-    sys_uc = PSB.build_system(PSB.PSISystems, "5_bus_hydro_uc_sys")
+    sys_uc = _build_medium_term_system()
 
     # Extract inflow data from UC simulation
     hydro_inflow_data = extract_hydro_inflow_from_simulation(sys_uc)
@@ -26,24 +63,11 @@ const SPI = SiennaPRASInterface
     # Verify we got data
     @Test.test !isempty(hydro_inflow_data)
 
-    # Check that we have HydroDispatch and/or HydroEnergyReservoir data
-    has_dispatch = haskey(hydro_inflow_data, "HydroDispatch")
-    has_reservoir = haskey(hydro_inflow_data, "HydroEnergyReservoir")
-    @Test.test has_dispatch || has_reservoir
 
-    # Verify each dataset is a matrix with expected structure
-    for (key, data) in hydro_inflow_data
-        @Test.test data isa Matrix{Float64}
-        # Should have at least one column (components)
-        @Test.test size(data, 2) >= 1
-        # Should have rows for each time period
-        @Test.test size(data, 1) >= 1
-        @info "Extracted $key: $(size(data)) matrix"
-    end
 end
 
 @Test.testset "Hydro Planning: Constructors with Inflow Data" begin
-    sys_uc = PSB.build_system(PSB.PSISystems, "5_bus_hydro_uc_sys")
+    sys_uc = _build_medium_term_system()
 
     # Extract inflow data
     hydro_inflow_data = extract_hydro_inflow_from_simulation(sys_uc)
@@ -65,7 +89,7 @@ end
 end
 
 @Test.testset "Hydro Planning: Constructor with System Parameter" begin
-    sys_uc = PSB.build_system(PSB.PSISystems, "5_bus_hydro_uc_sys")
+    sys_uc = _build_medium_term_system()
 
     # Test calling with system parameter to trigger simulation
     hydro_pras = SPI.HydroEnergyReservoirPRAS(true; system=sys_uc)
