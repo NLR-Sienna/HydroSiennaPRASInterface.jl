@@ -6,13 +6,15 @@ using HydroPowerSimulations
 using HiGHS
 using TimeSeries
 using Statistics
+using CSV
 
 const PSI = PowerSimulations
 const PSY = PowerSystems
 
-cur_dir = (@__DIR__)
+cur_dir = dirname(@__DIR__)
 model_dir = joinpath(cur_dir, "models")
 scripts_dir = joinpath(cur_dir, "scripts")
+results_dir = joinpath(cur_dir, "results")
 include(joinpath(scripts_dir, "hydro_dev_utils.jl"))
 
 weekly_sys = PSY.System(joinpath(model_dir, "sys_weekly.json"))
@@ -112,3 +114,39 @@ results_uc = get_decision_problem_results(results, "UC")
 
 all_variable_results = read_realized_variables(results_uc)
 all_parameter_results = read_realized_parameters(results_uc)
+
+save_results_to_csv(all_variable_results, results_dir, "weekly")
+save_results_to_csv(all_parameter_results, results_dir, "weekly")
+
+function save_results_to_csv(results_dict, results_dir, sys_prefix = "")
+    for key in keys(results_dict)
+        @info "Storing $key"
+        df = results_dict[key]
+        store_key = replace(key, "__" => "_")
+        save_path = joinpath(results_dir, sys_prefix)
+        isdir(save_path) || mkpath(save_path)
+        CSV.write(joinpath(save_path, "$(store_key).csv"), df)
+    end
+end
+
+
+hydro_reservoir_volume = all_variable_results["HydroReservoirVolumeVariable__HydroReservoir"]
+hydro_reservoir_head = all_variable_results["HydroReservoirHeadVariable__HydroReservoir"]
+
+
+reservoirs = get_components(HydroReservoir, sys)
+Mollejon_Reservoir = get_component(HydroReservoir, sys, "Mollejon_Reservoir")
+Vaca_Reservoir = get_component(HydroReservoir, sys, "Vaca_Reservoir")
+Chalillo_Reservoir = get_component(HydroReservoir, sys, "Chalillo_Reservoir")
+
+Mollejon_volume = filter(row -> row.name == "Mollejon_Reservoir", hydro_reservoir_volume)
+Mollejon_head = filter(row -> row.name == "Mollejon_Reservoir", hydro_reservoir_head)
+
+res = get_component(HydroReservoir, sys, "Mollejon_Reservoir")
+ts_array = get_time_series_array(SingleTimeSeries, res, "hydro_target"; ignore_scaling_factors = true)
+raw_tstamps  = timestamp(ts_array)
+
+res_weekly = get_component(HydroReservoir, weekly_sys, "Mollejon_Reservoir")
+ts_array_weekly = get_time_series_array(SingleTimeSeries, res_weekly, "hydro_target"; ignore_scaling_factors = true)
+raw_tstamps_weekly  = timestamp(ts_array_weekly)
+
