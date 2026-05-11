@@ -4,6 +4,8 @@ version = "0.1.0"
 authors = ["Surya Chandan Dhulipala <suryachandan.dhulipala@nrel.gov>", "Abdelrahman Ayad <Abdelrahman.Ayad@nlr.gov>"]
 
 [deps]
+CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
+DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 HiGHS = "87dc4568-4c63-4d18-b0c0-bb2238e4078b"
 HydroPowerSimulations = "fc1677e0-6ad7-4515-bf3a-bd6bf20a0b1b"
 InfrastructureSystems = "2cd47ed4-ca9b-11e9-27f2-ab636a7671f1"
@@ -15,6 +17,8 @@ SiennaPRASInterface = "4b496c86-8d00-441d-b504-079c710e0aa7"
 TimeSeries = "9e3dc215-6440-5c97-bce1-76c03772f85e"
 
 [compat]
+CSV = "0.10.16"
+DataFrames = "1.8.2"
 HiGHS = "1.20.1"
 HydroPowerSimulations = "0.15"
 InfrastructureSystems = "3.5.1"
