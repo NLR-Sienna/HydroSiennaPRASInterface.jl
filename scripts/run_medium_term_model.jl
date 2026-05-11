@@ -118,18 +118,6 @@ all_parameter_results = read_realized_parameters(results_uc)
 save_results_to_csv(all_variable_results, results_dir, "weekly")
 save_results_to_csv(all_parameter_results, results_dir, "weekly")
 
-function save_results_to_csv(results_dict, results_dir, sys_prefix = "")
-    for key in keys(results_dict)
-        @info "Storing $key"
-        df = results_dict[key]
-        store_key = replace(key, "__" => "_")
-        save_path = joinpath(results_dir, sys_prefix)
-        isdir(save_path) || mkpath(save_path)
-        CSV.write(joinpath(save_path, "$(store_key).csv"), df)
-    end
-end
-
-
 hydro_reservoir_volume = all_variable_results["HydroReservoirVolumeVariable__HydroReservoir"]
 hydro_reservoir_head = all_variable_results["HydroReservoirHeadVariable__HydroReservoir"]
 
