@@ -402,3 +402,42 @@ function resample_weekly_to_hourly(weekly_vals::Vector{Float64}, total_hours::In
     @assert length(hourly_vals) == total_hours "Expected $total_hours hourly values, got $(length(hourly_vals))"
     return hourly_vals
 end
+
+function save_results_to_csv(results_dict, results_dir, sys_prefix = "")
+    for key in keys(results_dict)
+        @info "Storing $key"
+        df = results_dict[key]
+        store_key = replace(key, "__" => "_")
+        save_path = joinpath(results_dir, sys_prefix)
+        isdir(save_path) || mkpath(save_path)
+        CSV.write(joinpath(save_path, "$(store_key).csv"), df)
+    end
+end
+
+function convert_hydro_targets_med_to_short(med_term_sys, short_term_sys, steps_in_resolution, total_steps, med_term_data, model_type)
+    nums = total_steps ÷ steps_in_resolution
+    nums_med_term = Int(size(med_term_data, 1) / length(get_components(HydroReservoir, med_term_sys)))
+    convertion_steps = nums ÷ nums_med_term
+
+    for res in get_components(HydroReservoir, med_term_sys)
+        @info "Converting $(res.name) from med-term to short-term with $convertion_steps steps per med-term step"
+        short_term_res    = get_component(HydroReservoir, short_term_sys, res.name)
+        med_term_res_data = filter(row -> row.name == res.name, med_term_data)[:, :value]
+        med_tstamps  = filter(row -> row.name == res.name, med_term_data)[:, :DateTime]
+        max_level    = get_storage_level_limits(res).max
+
+        short_term_res_data = repeat(med_term_res_data, inner = convertion_steps)
+        missing_steps = total_steps - length(short_term_res_data)
+        if missing_steps > 0
+            @info "Filling missing steps with max level for $(missing_steps) missing steps"
+            short_term_res_data = vcat(short_term_res_data, fill(max_level, missing_steps))
+        end
+
+        tstamps = [first(med_tstamps) + Hour(i) for i in 0:(total_steps - 1)]
+        short_tstamps = tstamps[1:steps_in_resolution:total_steps]
+
+        new_array = TimeArray(short_tstamps, short_term_res_data)
+        ts_new    = SingleTimeSeries(name = model_type, data = new_array)
+        add_time_series!(short_term_sys, short_term_res, ts_new)
+    end
+end
