@@ -70,7 +70,7 @@ end
 add_inflow_outflow_new_time_series!(med_term_sys, short_term_sys, steps_in_resolution, total_steps)
 add_reserves_new_time_series!(med_term_sys, short_term_sys, steps_in_resolution, total_steps)
 
-convert_hydro_targets_med_to_short(med_term_sys, short_term_sys, steps_in_resolution, total_steps, med_term_data, model_type)
+convert_hydro_targets_med_to_short(med_term_sys, short_term_sys, steps_in_resolution, total_steps, med_term_parameter, med_term_model_type)
 
 # add_final_target_new_time_series!(med_term_sys, sys, steps_in_resolution, total_steps)
 # add_hydro_target_new_time_series!(med_term_sys, sys, steps_in_resolution, total_steps)
