@@ -58,13 +58,8 @@ add_renewable_new_time_series!(med_term_sys, short_term_sys, steps_in_resolution
 med_term_res_head = CSV.read(joinpath(med_term_results_dir, "HydroReservoirHeadVariable_HydroReservoir.csv"), DataFrame)
 med_term_res_volume = CSV.read(joinpath(med_term_results_dir, "HydroReservoirVolumeVariable_HydroReservoir.csv"), DataFrame)
 
-if med_term_model_type == "target"
-    med_term_parameter = CSV.read(joinpath(med_term_results_dir, "WaterTargetTimeSeriesParameter_HydroReservoir.csv"), DataFrame)
-elseif med_term_model_type == "budget"
-    med_term_parameter = CSV.read(joinpath(med_term_results_dir, "WaterBudgetTimeSeriesParameter_HydroReservoir.csv"), DataFrame)
-else
-    error("Invalid med-term model type: $med_term_model_type")
-end
+med_term_parameter = CSV.read(joinpath(med_term_results_dir,
+                     "Water$(uppercasefirst(med_term_model_type))TimeSeriesParameter_HydroReservoir.csv"), DataFrame)
 
 # # Weekly targets/budgets
 add_inflow_outflow_new_time_series!(med_term_sys, short_term_sys, steps_in_resolution, total_steps)
