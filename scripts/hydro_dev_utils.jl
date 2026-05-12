@@ -437,7 +437,7 @@ function convert_hydro_targets_med_to_short(med_term_sys, short_term_sys, steps_
         short_tstamps = tstamps[1:steps_in_resolution:total_steps]
 
         new_array = TimeArray(short_tstamps, short_term_res_data)
-        ts_new    = SingleTimeSeries(name = model_type, data = new_array)
+        ts_new    = SingleTimeSeries(name = "hydro_$(model_type)", data = new_array)
         add_time_series!(short_term_sys, short_term_res, ts_new)
     end
 end
