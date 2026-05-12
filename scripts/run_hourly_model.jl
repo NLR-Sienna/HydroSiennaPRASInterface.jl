@@ -12,9 +12,9 @@ using DataFrames
 const PSI = PowerSimulations
 const PSY = PowerSystems
 
-cur_dir = (@__DIR__)
+scripts_dir = isfile(joinpath(@__DIR__, "hydro_dev_utils.jl")) ? (@__DIR__) : joinpath(@__DIR__, "scripts")
+cur_dir = dirname(scripts_dir)
 model_dir = joinpath(cur_dir, "models")
-scripts_dir = joinpath(cur_dir, "scripts")
 results_dir = joinpath(cur_dir, "results")
 include(joinpath(scripts_dir, "hydro_dev_utils.jl"))
 
@@ -70,7 +70,7 @@ end
 add_inflow_outflow_new_time_series!(med_term_sys, short_term_sys, steps_in_resolution, total_steps)
 add_reserves_new_time_series!(med_term_sys, short_term_sys, steps_in_resolution, total_steps)
 
-convert_hydro_targets_med_to_short(med_term_sys, short_term_sys, steps_in_resolution, total_steps, med_term_data, model_type)
+convert_hydro_targets_med_to_short(med_term_sys, short_term_sys, steps_in_resolution, total_steps, med_term_parameter, "hydro_target")
 
 # add_final_target_new_time_series!(med_term_sys, sys, steps_in_resolution, total_steps)
 # add_hydro_target_new_time_series!(med_term_sys, sys, steps_in_resolution, total_steps)

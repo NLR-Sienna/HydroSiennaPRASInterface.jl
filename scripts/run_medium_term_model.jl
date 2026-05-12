@@ -11,9 +11,9 @@ using CSV
 const PSI = PowerSimulations
 const PSY = PowerSystems
 
-cur_dir = dirname(@__DIR__)
+scripts_dir = isfile(joinpath(@__DIR__, "hydro_dev_utils.jl")) ? (@__DIR__) : joinpath(@__DIR__, "scripts")
+cur_dir = dirname(scripts_dir)
 model_dir = joinpath(cur_dir, "models")
-scripts_dir = joinpath(cur_dir, "scripts")
 results_dir = joinpath(cur_dir, "results")
 include(joinpath(scripts_dir, "hydro_dev_utils.jl"))
 
