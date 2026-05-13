@@ -19,7 +19,7 @@ results_dir = joinpath(cur_dir, "results")
 include(joinpath(scripts_dir, "hydro_dev_utils.jl"))
 
 med_term_resolution_name = "weekly"
-med_term_model_type = "target"
+med_term_model_type = "hydro_target"
 med_term_sys = PSY.System(joinpath(model_dir, "sys_$(med_term_resolution_name).json"))
 med_term_results_dir = joinpath(results_dir, med_term_resolution_name)
 if isdir(med_term_results_dir)
@@ -29,7 +29,7 @@ else
 end
 
 short_term_resolution_name = "hourly"
-short_term_model_type = "target"
+short_term_model_type = "hydro_target"
 
 short_term_sys = deepcopy(med_term_sys)
 remove_time_series!(short_term_sys, SingleTimeSeries)

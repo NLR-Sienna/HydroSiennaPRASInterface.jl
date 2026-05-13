@@ -19,11 +19,11 @@ hydro active power data for use as inflow time series.
 - `hydro_inflow_data::Dict`: Precomputed inflow data from `extract_hydro_inflow_from_simulation`
 - Other kwargs forwarded to base `GeneratorPRAS` constructor
 """
-function SPI.GeneratorPRAS(hydro_planning::Bool; system=nothing, hydro_inflow_data=nothing, kwargs...)
+function SPI.GeneratorPRAS(hydro_planning::Bool; system=nothing, hydro_inflow_data=nothing, template=nothing, kwargs...)
     if hydro_planning
         if !isnothing(system) && isnothing(hydro_inflow_data)
             @info "GeneratorPRAS: Running UC simulation for hydro planning..."
-            hydro_inflow_data = extract_hydro_inflow_from_simulation(system)
+            hydro_inflow_data = extract_hydro_inflow_from_simulation(system; template=template)
         end
         if !isnothing(hydro_inflow_data) && !isnothing(system)
             @info "GeneratorPRAS: Applying hydro inflow data to system for PRAS conversion"
@@ -53,11 +53,11 @@ hydro_inflow_data = extract_hydro_inflow_from_simulation(system)
 SPI.HydroEnergyReservoirPRAS(true, system=system; max_active_power="max_active_power")
 ```
 """
-function SPI.HydroEnergyReservoirPRAS(hydro_planning::Bool; system=nothing, hydro_inflow_data=nothing, kwargs...)
+function SPI.HydroEnergyReservoirPRAS(hydro_planning::Bool; system=nothing, hydro_inflow_data=nothing, template=nothing, kwargs...)
     if hydro_planning
         if !isnothing(system) && isnothing(hydro_inflow_data)
             @info "HydroEnergyReservoirPRAS: Running UC simulation for hydro planning..."
-            hydro_inflow_data = extract_hydro_inflow_from_simulation(system)
+            hydro_inflow_data = extract_hydro_inflow_from_simulation(system; template=template)
         end
         if !isnothing(hydro_inflow_data) && !isnothing(system)
             @info "HydroEnergyReservoirPRAS: Applying hydro inflow data to system for PRAS conversion"
@@ -75,11 +75,11 @@ if isdefined(SPI, :EnergyReservoirSoC)
     Hydro-planning overload for `EnergyReservoirSoC` (only defined when
     `SiennaPRASInterface` exposes this constructor in the current version).
     """
-    @eval function SPI.EnergyReservoirSoC(hydro_planning::Bool; system=nothing, hydro_inflow_data=nothing, kwargs...)
+    @eval function SPI.EnergyReservoirSoC(hydro_planning::Bool; system=nothing, hydro_inflow_data=nothing, template=nothing, kwargs...)
         if hydro_planning
             if !isnothing(system) && isnothing(hydro_inflow_data)
                 @info "EnergyReservoirSoC: Running UC simulation for hydro planning..."
-                hydro_inflow_data = extract_hydro_inflow_from_simulation(system)
+                hydro_inflow_data = extract_hydro_inflow_from_simulation(system; template=template)
             end
             if !isnothing(hydro_inflow_data) && !isnothing(system)
                 @info "EnergyReservoirSoC: Applying hydro inflow data to system for PRAS conversion"
@@ -125,10 +125,34 @@ function extract_hydro_inflow_from_simulation(
         false
     end
 
+    # Detect system resolution from SingleTimeSeries or DeterministicSingleTimeSeries
+    _system_resolution = try
+        # First try SingleTimeSeries (present before transform)
+        sts = collect(Iterators.take(
+            PSY.get_time_series_multiple(working_system; time_series_type=PSY.SingleTimeSeries), 1
+        ))
+        if !isempty(sts)
+            PSY.get_resolution(last(sts))
+        else
+            # Fall back to DeterministicSingleTimeSeries (present after transform)
+            dsts = collect(Iterators.take(
+                PSY.get_time_series_multiple(working_system; time_series_type=PSY.DeterministicSingleTimeSeries), 1
+            ))
+            isempty(dsts) ? Hour(1) : PSY.get_resolution(last(dsts))
+        end
+    catch
+        Hour(1)
+    end
+    _is_hourly = _system_resolution <= Hour(1)
+
     if !has_forecast_data && isdefined(PSY, :transform_single_time_series!)
         working_system = deepcopy(system)
         try
-            PSY.transform_single_time_series!(working_system, Week(25), Week(1))
+            if _is_hourly
+                PSY.transform_single_time_series!(working_system, Hour(25), Hour(1))
+            else
+                PSY.transform_single_time_series!(working_system, Week(25), Week(1))
+            end
         catch e
             @debug "Failed to transform single time series to deterministic forecasts for hydro planning" exception=(e, catch_backtrace())
         end
@@ -173,6 +197,17 @@ function extract_hydro_inflow_from_simulation(
         if _component_count(:HydroDispatch) > 0
             PSI.set_device_model!(template, PSY.HydroDispatch, HPS.HydroDispatchRunOfRiver)
         end
+
+        # Add reserve service model with slacks if VariableReserve{ReserveUp} components are present.
+        # Must use the concrete parameterized type directly — get_components on the bare
+        # VariableReserve abstract/parametric type returns 0 even when components exist.
+        if isdefined(PSY, :VariableReserve) && isdefined(PSY, :ReserveUp) &&
+                !isempty(collect(PSY.get_components(PSY.VariableReserve{PSY.ReserveUp}, working_system)))
+            PSI.set_service_model!(
+                template,
+                PSI.ServiceModel(PSY.VariableReserve{PSY.ReserveUp}, PSI.RangeReserve; use_slacks=true),
+            )
+        end
         #TODO: other type of components might need to be set for device model
 
     end
@@ -182,7 +217,10 @@ function extract_hydro_inflow_from_simulation(
         template,
         working_system;
         name = "HydroPlanning",
-        initialize_model = false,
+        initialize_model = true,
+        calculate_conflict = true,
+         store_variable_names       = true,
+    optimizer_solve_log_print  = true,
         optimizer = optimizer,
     )
 
@@ -203,17 +241,18 @@ function extract_hydro_inflow_from_simulation(
     end
 
     sim_steps = begin
+        default_steps = _is_hourly ? 8736 : 52
         try
             available_times = PSY.get_forecast_initial_times(working_system)
-            isempty(available_times) ? 52 : max(1, min(52, length(available_times)))
+            isempty(available_times) ? default_steps : max(1, length(available_times))
         catch
-            52
+            default_steps
         end
     end
 
     sim = PSI.Simulation(;
         name = "hydro_planning_sim",
-        steps = sim_steps,
+        steps = 24,
         models = models,
         initial_time = sim_initial_time,
         sequence = sequence,
@@ -224,7 +263,7 @@ function extract_hydro_inflow_from_simulation(
     PSI.build!(sim)
 
     @info "Executing UC simulation for hydro planning..."
-    PSI.execute!(sim; enable_progress_bar = false)
+    PSI.execute!(sim)
 
     results = PSI.SimulationResults(sim; ignore_status = true)
     r = PSI.get_decision_problem_results(results, "HydroPlanning")

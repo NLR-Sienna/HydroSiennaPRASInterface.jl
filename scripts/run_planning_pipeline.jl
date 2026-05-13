@@ -38,6 +38,7 @@ resolution_hourly = Hour(1)
 resolution_weekly = Week(1)
 steps_mt          = resolution_weekly ÷ resolution_hourly
 total_steps_mt    = num_weeks_mt * steps_mt
+nums              = num_weeks_mt   # global used by hydro_dev_utils functions
 
 set_turbine_cost_to_zero!(med_term_sys)
 add_fuel_cost_new_time_series!(weekly_sys, med_term_sys, steps_mt, total_steps_mt)
@@ -81,13 +82,15 @@ model_mt = DecisionModel(
     calculate_conflict         = true,
 )
 
+models_mt = SimulationModels(; decision_models = [model_mt])
+
 sim_mt = Simulation(
     name              = "med_term",
     steps             = 52,
-    models            = SimulationModels(; decision_models = [model_mt]),
+    models            = models_mt,
     initial_time      = DateTime("2023-01-01T00:00:00"),
     sequence          = SimulationSequence(;
-        models                 = SimulationModels(; decision_models = [model_mt]),
+        models                 = models_mt,
         ini_cond_chronology    = InterProblemChronology(),
     ),
     simulation_folder = mktempdir(),
@@ -111,7 +114,7 @@ end
 med_term_res_volume = all_variable_results_mt["HydroReservoirVolumeVariable__HydroReservoir"]
 med_term_res_head   = all_variable_results_mt["HydroReservoirHeadVariable__HydroReservoir"]
 
-if med_term_model_type == "target"
+if med_term_model_type == "hydro_target"
     med_term_parameter = all_parameter_results_mt["WaterTargetTimeSeriesParameter__HydroReservoir"]
 elseif med_term_model_type == "budget"
     med_term_parameter = all_parameter_results_mt["WaterBudgetTimeSeriesParameter__HydroReservoir"]
@@ -130,17 +133,19 @@ remove_time_series!(short_term_sys, SingleTimeSeries)
 num_hours_st  = 365 * 24
 steps_st      = Hour(1) ÷ resolution_hourly   # = 1
 total_steps_st = num_hours_st * steps_st
+nums           = num_hours_st   # global used by hydro_dev_utils functions
 
 set_turbine_cost_to_zero!(short_term_sys)
 add_fuel_cost_new_time_series!(weekly_sys, short_term_sys, steps_st, total_steps_st)
 add_load_new_mean_time_series!(weekly_sys, short_term_sys, steps_st, total_steps_st; load_type = StandardLoad)
 add_renewable_new_time_series!(weekly_sys, short_term_sys, steps_st, total_steps_st; renewable_type = RenewableDispatch)
 add_renewable_new_time_series!(weekly_sys, short_term_sys, steps_st, total_steps_st; renewable_type = RenewableNonDispatch)
-add_inflow_outflow_new_time_series!(med_term_sys, short_term_sys, steps_st, total_steps_st)
-add_reserves_new_time_series!(med_term_sys, short_term_sys, steps_st, total_steps_st)
+add_inflow_outflow_new_time_series!(weekly_sys, short_term_sys, steps_st, total_steps_st)
+add_reserves_new_time_series!(weekly_sys, short_term_sys, steps_st, total_steps_st)
 
 convert_hydro_targets_med_to_short(med_term_sys, short_term_sys, steps_st, total_steps_st, med_term_parameter, "hydro_target")
 
+# Transform must happen after ALL SingleTimeSeries are added
 transform_single_time_series!(short_term_sys, Hour(25), Hour(1))
 
 for reservoir_name in get_name.(get_components(HydroReservoir, short_term_sys))
@@ -174,13 +179,15 @@ model_st = DecisionModel(
     calculate_conflict         = true,
 )
 
+models_st = SimulationModels(; decision_models = [model_st])
+
 sim_st = Simulation(
     name              = "short_term",
     steps             = 8736,
-    models            = SimulationModels(; decision_models = [model_st]),
+    models            = models_st,
     initial_time      = DateTime("2023-01-01T00:00:00"),
     sequence          = SimulationSequence(;
-        models                 = SimulationModels(; decision_models = [model_st]),
+        models                 = models_st,
         ini_cond_chronology    = InterProblemChronology(),
     ),
     simulation_folder = mktempdir(),
