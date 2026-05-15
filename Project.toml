@@ -1,7 +1,7 @@
 name = "HydroSiennaPRASInterface"
 uuid = "d5d6a0e5-9c8b-4e6f-8c8e-9e5f5c5d5c5d"
 version = "0.1.0"
-authors = ["Surya Chandan Dhulipala <suryachandan.dhulipala@nrel.gov>", "Abdelrahman Ayad <Abdelrahman.Ayad@nlr.gov>"]
+authors = ["Surya Chandan Dhulipala <suryachandan.dhulipala@nlr.gov>", "Abdelrahman Ayad <abdelrahman.Ayad@nlr.gov>", "Vivienne Liu <vivienne.liu@nlr.gov>"]
 
 [deps]
 CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
