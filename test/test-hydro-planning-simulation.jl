@@ -208,18 +208,18 @@ end
     hydro_inflow_data = extract_hydro_inflow_from_simulation(sys_uc)
 
     # Test GeneratorPRAS with hydro_planning=true and inflow_data
-    gen_pras = SPI.GeneratorPRAS(true; hydro_inflow_data=hydro_inflow_data)
+    gen_pras = GeneratorPRAS(; hydro_planning=true, hydro_inflow_data=hydro_inflow_data)
     @Test.test gen_pras isa SPI.GeneratorPRAS
 
     # Test HydroEnergyReservoirPRAS with hydro_planning=true and inflow_data
-    hydro_pras = SPI.HydroEnergyReservoirPRAS(true; hydro_inflow_data=hydro_inflow_data)
+    hydro_pras = HydroEnergyReservoirPRAS(; hydro_planning=true, hydro_inflow_data=hydro_inflow_data)
     @Test.test hydro_pras isa SPI.HydroEnergyReservoirPRAS
 
     # Test with hydro_planning=false
-    gen_pras_no_planning = SPI.GeneratorPRAS(false)
+    gen_pras_no_planning = GeneratorPRAS(; hydro_planning=false)
     @Test.test gen_pras_no_planning isa SPI.GeneratorPRAS
 
-    hydro_pras_no_planning = SPI.HydroEnergyReservoirPRAS(false)
+    hydro_pras_no_planning = HydroEnergyReservoirPRAS(; hydro_planning=false)
     @Test.test hydro_pras_no_planning isa SPI.HydroEnergyReservoirPRAS
 end
 

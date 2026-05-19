@@ -7,23 +7,23 @@ UC simulations for use in multi-stage RA planning.
 """
 
 """
-    SPI.GeneratorPRAS(hydro_planning::Bool; system=nothing, hydro_inflow_data=nothing, kwargs...)
+    GeneratorPRAS(; hydro_planning=false, system=nothing, hydro_inflow_data=nothing, kwargs...)
 
-Hydro-planning overload for `GeneratorPRAS` that extracts inflow data from UC simulation.
+Hydro-planning wrapper for `SPI.GeneratorPRAS`.
 When `hydro_planning=true` and `system` is provided, runs a UC simulation to extract
 hydro active power data for use as inflow time series.
 
 # Arguments
-- `hydro_planning::Bool`: Whether to run hydro planning simulation
+- `hydro_planning::Bool`: Whether to run hydro planning simulation (default: `false`)
 - `system::PSY.System`: Optional system for UC simulation (will be modified in place)
 - `hydro_inflow_data::Dict`: Precomputed inflow data from `extract_hydro_inflow_from_simulation`
 - Other kwargs forwarded to base `GeneratorPRAS` constructor
 """
-function SPI.GeneratorPRAS(hydro_planning::Bool; system=nothing, hydro_inflow_data=nothing, template=nothing, kwargs...)
+function GeneratorPRAS(; hydro_planning::Bool=false, system=nothing, hydro_inflow_data=nothing, template=nothing, reservoir_attributes::Dict=Dict("hydro_target" => true, "hydro_budget" => false), kwargs...)
     if hydro_planning
         if !isnothing(system) && isnothing(hydro_inflow_data)
             @info "GeneratorPRAS: Running UC simulation for hydro planning..."
-            hydro_inflow_data = extract_hydro_inflow_from_simulation(system; template=template)
+            hydro_inflow_data = extract_hydro_inflow_from_simulation(system; template=template, reservoir_attributes=reservoir_attributes)
         end
         if !isnothing(hydro_inflow_data) && !isnothing(system)
             @info "GeneratorPRAS: Applying hydro inflow data to system for PRAS conversion"
@@ -35,14 +35,14 @@ function SPI.GeneratorPRAS(hydro_planning::Bool; system=nothing, hydro_inflow_da
 end
 
 """
-    SPI.HydroEnergyReservoirPRAS(hydro_planning::Bool; system=nothing, hydro_inflow_data=nothing, kwargs...)
+    HydroEnergyReservoirPRAS(; hydro_planning=false, system=nothing, hydro_inflow_data=nothing, kwargs...)
 
-Hydro-planning overload for `HydroEnergyReservoirPRAS` that extracts inflow data from UC simulation.
+Hydro-planning wrapper for `SPI.HydroEnergyReservoirPRAS`.
 When `hydro_planning=true` and `system` is provided, runs a UC simulation to extract
 hydro active power data for use as inflow time series.
 
 # Arguments
-- `hydro_planning::Bool`: Whether to run hydro planning simulation
+- `hydro_planning::Bool`: Whether to run hydro planning simulation (default: `false`)
 - `system::PSY.System`: Optional system for UC simulation (will be modified in place)
 - `hydro_inflow_data::Dict`: Precomputed inflow data from `extract_hydro_inflow_from_simulation`
 - Other kwargs forwarded to base `HydroEnergyReservoirPRAS` constructor
@@ -50,14 +50,14 @@ hydro active power data for use as inflow time series.
 # Example
 ```julia
 hydro_inflow_data = extract_hydro_inflow_from_simulation(system)
-SPI.HydroEnergyReservoirPRAS(true, system=system; max_active_power="max_active_power")
+SPI.HydroEnergyReservoirPRAS(; hydro_planning=true, system=system, max_active_power="max_active_power")
 ```
 """
-function SPI.HydroEnergyReservoirPRAS(hydro_planning::Bool; system=nothing, hydro_inflow_data=nothing, template=nothing, kwargs...)
+function HydroEnergyReservoirPRAS(; hydro_planning::Bool=false, system=nothing, hydro_inflow_data=nothing, template=nothing, reservoir_attributes::Dict=Dict("hydro_target" => true, "hydro_budget" => false), kwargs...)
     if hydro_planning
         if !isnothing(system) && isnothing(hydro_inflow_data)
             @info "HydroEnergyReservoirPRAS: Running UC simulation for hydro planning..."
-            hydro_inflow_data = extract_hydro_inflow_from_simulation(system; template=template)
+            hydro_inflow_data = extract_hydro_inflow_from_simulation(system; template=template, reservoir_attributes=reservoir_attributes)
         end
         if !isnothing(hydro_inflow_data) && !isnothing(system)
             @info "HydroEnergyReservoirPRAS: Applying hydro inflow data to system for PRAS conversion"
@@ -68,31 +68,79 @@ function SPI.HydroEnergyReservoirPRAS(hydro_planning::Bool; system=nothing, hydr
     return SPI.HydroEnergyReservoirPRAS(; kwargs...)
 end
 
-if isdefined(SPI, :EnergyReservoirSoC)
-    """
-        SPI.EnergyReservoirSoC(hydro_planning::Bool; system=nothing, hydro_inflow_data=nothing, kwargs...)
+"""
+    EnergyReservoirSoC(; hydro_planning=false, system=nothing, hydro_inflow_data=nothing, kwargs...)
 
-    Hydro-planning overload for `EnergyReservoirSoC` (only defined when
-    `SiennaPRASInterface` exposes this constructor in the current version).
-    """
-    @eval function SPI.EnergyReservoirSoC(hydro_planning::Bool; system=nothing, hydro_inflow_data=nothing, template=nothing, kwargs...)
-        if hydro_planning
-            if !isnothing(system) && isnothing(hydro_inflow_data)
-                @info "EnergyReservoirSoC: Running UC simulation for hydro planning..."
-                hydro_inflow_data = extract_hydro_inflow_from_simulation(system; template=template)
-            end
-            if !isnothing(hydro_inflow_data) && !isnothing(system)
-                @info "EnergyReservoirSoC: Applying hydro inflow data to system for PRAS conversion"
-                apply_hydro_inflow_to_system!(system, hydro_inflow_data)
-            end
-        end
-
-        return SPI.EnergyReservoirSoC(; kwargs...)
+Hydro-planning wrapper for `SPI.EnergyReservoirSoC` (only available when
+`SiennaPRASInterface` exports `EnergyReservoirSoC` in the current version).
+Errors with a clear message when calling against an incompatible SPI version.
+"""
+function EnergyReservoirSoC(; hydro_planning::Bool=false, system=nothing, hydro_inflow_data=nothing, template=nothing, reservoir_attributes::Dict=Dict("hydro_target" => true, "hydro_budget" => false), kwargs...)
+    if !isdefined(SPI, :EnergyReservoirSoC)
+        error("SiennaPRASInterface does not export EnergyReservoirSoC in this version")
     end
+    if hydro_planning
+        if !isnothing(system) && isnothing(hydro_inflow_data)
+            @info "EnergyReservoirSoC: Running UC simulation for hydro planning..."
+            hydro_inflow_data = extract_hydro_inflow_from_simulation(system; template=template, reservoir_attributes=reservoir_attributes)
+        end
+        if !isnothing(hydro_inflow_data) && !isnothing(system)
+            @info "EnergyReservoirSoC: Applying hydro inflow data to system for PRAS conversion"
+            apply_hydro_inflow_to_system!(system, hydro_inflow_data)
+        end
+    end
+
+    return SPI.EnergyReservoirSoC(; kwargs...)
 end
 
 """
-    (system::PSY.System; template=nothing, optimizer=HiGHS.Optimizer)
+    build_reservoirs_mapping(system::PSY.System)
+
+Build a turbine-to-reservoir mapping for the available hydro components in `system` using
+HydroPowerSimulations helper methods. Unavailable turbines are automatically excluded.
+
+This function is useful for inspecting the mapping **before** running a simulation, so you
+can verify which turbines are attributed to which reservoir.
+
+# Returns
+A 2-tuple `(reservoirs_mapping, turbine_to_reservoir_map)` where:
+- `reservoirs_mapping::Dict{String, Dict{String, Vector{String}}}`: maps each reservoir name to
+  dicts with keys `"upstream_turbines"`, `"downstream_turbines"`, and `"upstream_reservoirs"`.
+- `turbine_to_reservoir_map::Dict{String, String}`: flat map from turbine name → reservoir name
+  (derived from `"upstream_turbines"` only).
+
+# Example
+```julia
+reservoirs_mapping, turbine_map = build_reservoirs_mapping(sys)
+# Inspect before running the simulation
+hydro_data = extract_hydro_inflow_from_simulation(sys; turbine_to_reservoir_map=turbine_map)
+```
+"""
+function build_reservoirs_mapping(system::PSY.System)
+    reservoirs_mapping = Dict{String, Dict{String, Vector{String}}}()
+    for res in HPS.get_available_reservoirs(system)
+        upstream_turbines   = PSY.get_name.(HPS.get_available_turbines(res, Union{HPS.TotalHydroFlowRateReservoirIncoming, HPS.TotalHydroPowerReservoirIncoming}))
+        downstream_turbines = PSY.get_name.(HPS.get_available_turbines(res, Union{HPS.TotalHydroFlowRateReservoirOutgoing, HPS.TotalHydroPowerReservoirOutgoing}))
+        upstream_reservoirs = PSY.get_name.(res.upstream_reservoirs)
+        reservoirs_mapping[PSY.get_name(res)] = Dict{String, Vector{String}}(
+            "upstream_turbines"   => upstream_turbines,
+            "downstream_turbines" => downstream_turbines,
+            "upstream_reservoirs" => upstream_reservoirs,
+        )
+    end
+
+    turbine_to_reservoir_map = Dict{String, String}()
+    for (res_name, mapping) in reservoirs_mapping
+        for turbine_name in mapping["upstream_turbines"]
+            turbine_to_reservoir_map[turbine_name] = res_name
+        end
+    end
+
+    return reservoirs_mapping, turbine_to_reservoir_map
+end
+
+"""
+    extract_hydro_inflow_from_simulation(system; template, optimizer, reservoir_attributes)
 
 Run a UC simulation to extract hydro active power data for use as inflow time series in multi-stage RA planning.
 
@@ -100,6 +148,10 @@ Run a UC simulation to extract hydro active power data for use as inflow time se
 - `system::PSY.System`: Power system to simulate
 - `template::PSI.ProblemTemplate`: Optional custom UC template (defaults to standard UC with hydro)
 - `optimizer`: Optimizer for UC problem (default: HiGHS.Optimizer)
+- `reservoir_attributes::Dict`: Attributes dict passed to the `HydroWaterModelReservoir` device model
+  (default: `Dict("hydro_target" => true, "hydro_budget" => false)`)
+- `turbine_to_reservoir_map::Union{Nothing, Dict{String,String}}`: Pre-built turbine-to-reservoir mapping
+  from `build_reservoirs_mapping`. If `nothing`, the mapping is built automatically inside this function.
 
 # Returns
 - `Dict{String, Any}`: Dictionary mapping hydro component categories to extracted inflow payloads.
@@ -109,13 +161,17 @@ Run a UC simulation to extract hydro active power data for use as inflow time se
 # Example
 ```julia
 sys = PSB.build_system(PSB.PSISystems, "5_bus_hydro_uc_sys")
-hydro_data = extract_hydro_inflow_from_simulation(sys)
+# Optionally inspect the mapping before running the simulation:
+reservoirs_mapping, turbine_map = build_reservoirs_mapping(sys)
+hydro_data = extract_hydro_inflow_from_simulation(sys; turbine_to_reservoir_map=turbine_map)
 ```
 """
 function extract_hydro_inflow_from_simulation(
     system::PSY.System;
     template::Union{Nothing, PSI.ProblemTemplate}=nothing,
     optimizer=HiGHS.Optimizer,
+    reservoir_attributes::Dict=Dict("hydro_target" => true, "hydro_budget" => false),
+    turbine_to_reservoir_map::Union{Nothing, Dict{String, String}}=nothing,
 )
     working_system = system
 
@@ -158,15 +214,15 @@ function extract_hydro_inflow_from_simulation(
         end
     end
 
-    function _component_count(component_type)
+    function _component_count(sys, component_type)
         if !isdefined(PSY, component_type)
             return 0
         end
-        return length(collect(PSY.get_components(getfield(PSY, component_type), working_system)))
+        return length(PSY.get_components(getfield(PSY, component_type), working_system))
     end
 
-    function _set_device_model_if_components!(template_obj, component_type, formulation)
-        if _component_count(component_type) > 0
+    function _set_device_model_if_components!(template_obj, sys, component_type, formulation)
+        if _component_count(sys, component_type) > 0
             PSI.set_device_model!(template_obj, getfield(PSY, component_type), formulation)
         end
     end
@@ -175,26 +231,26 @@ function extract_hydro_inflow_from_simulation(
     if isnothing(template)
         template = PSI.ProblemTemplate(PSI.NetworkModel(PSI.CopperPlatePowerModel; use_slacks = true))
 
-        _set_device_model_if_components!(template, :ThermalStandard, PSI.ThermalDispatchNoMin)
-        _set_device_model_if_components!(template, :RenewableDispatch, PSI.RenewableFullDispatch)
-        _set_device_model_if_components!(template, :RenewableNonDispatch, PSI.FixedOutput)
-        _set_device_model_if_components!(template, :StandardLoad, PSI.StaticPowerLoad)
-        _set_device_model_if_components!(template, :PowerLoad, PSI.StaticPowerLoad)
+        _set_device_model_if_components!(template, working_system, :ThermalStandard, PSI.ThermalDispatchNoMin)
+        _set_device_model_if_components!(template, working_system, :RenewableDispatch, PSI.RenewableFullDispatch)
+        _set_device_model_if_components!(template, working_system, :RenewableNonDispatch, PSI.FixedOutput)
+        _set_device_model_if_components!(template, working_system, :StandardLoad, PSI.StaticPowerLoad)
+        _set_device_model_if_components!(template, working_system, :PowerLoad, PSI.StaticPowerLoad)
 
-        if _component_count(:HydroReservoir) > 0
+        if _component_count(working_system, :HydroReservoir) > 0
             reservoir_model = PSI.DeviceModel(
                 PSY.HydroReservoir,
                 HPS.HydroWaterModelReservoir;
-                attributes = Dict("hydro_target" => true, "hydro_budget" => false),
+                attributes = reservoir_attributes,
             )
             PSI.set_device_model!(template, reservoir_model)
+
+            if _component_count(working_system, :HydroTurbine) > 0
+                PSI.set_device_model!(template, PSY.HydroTurbine, HPS.HydroTurbineWaterLinearCommitment)
+            end
         end
 
-        if _component_count(:HydroTurbine) > 0
-            PSI.set_device_model!(template, PSY.HydroTurbine, HPS.HydroTurbineWaterLinearCommitment)
-        end
-
-        if _component_count(:HydroDispatch) > 0
+        if _component_count(working_system, :HydroDispatch) > 0
             PSI.set_device_model!(template, PSY.HydroDispatch, HPS.HydroDispatchRunOfRiver)
         end
 
@@ -335,21 +391,15 @@ function extract_hydro_inflow_from_simulation(
         if !isempty(reservoir_list)
             turbine_var_df = _extract_variable_dataframe("ActivePowerVariable__HydroTurbine")
 
-            turbine_to_reservoir_map = Dict{String, String}()
-            for reservoir in reservoir_list
-                upstream_turbines = if isdefined(PSY, :HydroTurbine) &&
-                                       hasproperty(reservoir, :upstream_turbines) &&
-                                       !isempty(reservoir.upstream_turbines)
-                    reservoir.upstream_turbines
-                else
-                    []
-                end
-                for turbine in upstream_turbines
-                    turbine_to_reservoir_map[PSY.get_name(turbine)] = PSY.get_name(reservoir)
-                end
+            # Use provided mapping or build it from the working system
+            _turbine_to_reservoir_map = if !isnothing(turbine_to_reservoir_map)
+                turbine_to_reservoir_map
+            else
+                _, m = build_reservoirs_mapping(working_system)
+                m
             end
 
-            if !isnothing(turbine_var_df) && size(turbine_var_df, 2) >= 2 && !isempty(turbine_to_reservoir_map)
+            if !isnothing(turbine_var_df) && size(turbine_var_df, 2) >= 2 && !isempty(_turbine_to_reservoir_map)
                 turbine_long_df = DataFrame(:DateTime => DateTime[], :name => String[], :value => Float64[])
                 lower_names = lowercase.(String.(names(turbine_var_df)))
                 dt_idx = findfirst(x -> x in ("datetime", "timestamp", "time"), lower_names)
@@ -388,7 +438,7 @@ function extract_hydro_inflow_from_simulation(
                 end
 
                 if !isempty(turbine_long_df)
-                    turbine_long_df.reservoir = [get(turbine_to_reservoir_map, n, missing) for n in turbine_long_df.name]
+                    turbine_long_df.reservoir = [get(_turbine_to_reservoir_map, n, missing) for n in turbine_long_df.name]
                     turbine_long_df = DataFrames.dropmissing(turbine_long_df, :reservoir)
 
                     if !isempty(turbine_long_df)

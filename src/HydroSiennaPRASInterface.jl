@@ -16,12 +16,12 @@ using HydroSiennaPRASInterface
 SPI.HydroEnergyReservoirPRAS()
 
 # New call (with hydro planning enabled)
-SPI.HydroEnergyReservoirPRAS(true)
+HydroEnergyReservoirPRAS(; hydro_planning=true)
 
 # With UC simulation to extract hydro inflow data
 sys = PSB.build_system(PSB.PSISystems, "5_bus_hydro_uc_sys")
 hydro_data = extract_hydro_inflow_from_simulation(sys)
-SPI.HydroEnergyReservoirPRAS(true, hydro_inflow_data=hydro_data; ...)
+HydroEnergyReservoirPRAS(; hydro_planning=true, hydro_inflow_data=hydro_data)
 ```
 """
 module HydroSiennaPRASInterface
@@ -43,10 +43,12 @@ const PSB = PowerSystemCaseBuilder
 const DataFrame = DataFrames.DataFrame
 
 # Export the hydro planning extraction and integration functions
-export extract_hydro_inflow_from_simulation, apply_hydro_inflow_to_system!
+export extract_hydro_inflow_from_simulation, apply_hydro_inflow_to_system!, build_reservoirs_mapping
+# Export hydro-planning wrapper constructors (use these instead of SPI.* when hydro_planning=true)
+export GeneratorPRAS, HydroEnergyReservoirPRAS, EnergyReservoirSoC
 
-# This module extends SPI constructors with the hydro_planning parameter
-# The overloaded methods are automatically available when both packages are loaded
+# This module provides hydro-planning wrapper constructors that delegate to SPI
+# after performing optional UC simulation and inflow data extraction/application.
 
 include("hydro_planning_overloads.jl")
 
