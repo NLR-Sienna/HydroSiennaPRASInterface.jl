@@ -381,6 +381,28 @@ function add_hydro_target_new_time_series!(sys, sys_other, steps_in_resolution, 
     end
 end
 
+function add_hydro_budget_new_time_series!(sys, sys_other, steps_in_resolution, total_steps, budget_timeseries_df)
+    nums = total_steps ÷ steps_in_resolution
+
+    weekly_ts = budget_timeseries_df[:, :DateTime]
+    new_weekly_ts  = [weekly_ts[1] + Week(i) for i in 0:(nums - 1)]
+
+    for res in get_components(HydroReservoir, sys)
+        res_name = get_name(res)
+        res_other    = get_component(HydroReservoir, sys_other, res_name)
+        weekly_vals = Float64.(budget_timeseries_df[:, res_name])
+        
+        # Fill any remaining weeks if total_steps is not an exact multiple of steps_in_resolution
+        if length(weekly_ts) < length(new_weekly_ts)
+            weekly_vals = vcat(weekly_vals, fill(last(weekly_vals), length(new_weekly_ts) - length(weekly_ts)))
+        end
+
+        new_array = TimeArray(new_weekly_ts, weekly_vals)
+        ts_new    = SingleTimeSeries(name = "hydro_budget", data = new_array)
+        add_time_series!(sys_other, res_other, ts_new)
+    end
+end
+
 function resample_weekly_to_hourly(weekly_vals::Vector{Float64}, total_hours::Int=8760)
     @assert length(weekly_vals) == 52 "Expected 52 weekly values, got $(length(weekly_vals))"
     
