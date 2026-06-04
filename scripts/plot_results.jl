@@ -4,12 +4,13 @@ const PSY = PowerSystems
 
 weekly_model_type      = "target"  # "target" or "budget"
 hourly_model_type      = "target" # "target" or "budget"
-weekly_hydro_model_type = "Energy"  # "Energy" or "Water"
-hourly_hydro_model_type = "Energy"  # "Energy" or "Water"
+hydro_model_type        = "Water"  # "Energy" or "Water"
+weekly_hydro_model_type = hydro_model_type  # "Energy" or "Water"
+hourly_hydro_model_type = hydro_model_type  # "Energy" or "Water"
 plots_folder = "$(weekly_hydro_model_type)_weekly_$(weekly_model_type)_hourly_$(hourly_model_type)"
 # ── Paths ─────────────────────────────────────────────────────────────────────
-const WEEKLY_DIR = joinpath(@__DIR__, "..", "results", "$(weekly_hydro_model_type)_weekly_$(weekly_model_type)")
-const HOURLY_DIR = joinpath(@__DIR__, "..", "results", "$(hourly_hydro_model_type)_hourly_$(hourly_model_type)")
+const WEEKLY_DIR = joinpath(@__DIR__, "..", "results", "$(hydro_model_type)_weekly_$(weekly_model_type)_hourly_$(hourly_model_type)", "weekly")
+const HOURLY_DIR = joinpath(@__DIR__, "..", "results", "$(hydro_model_type)_weekly_$(weekly_model_type)_hourly_$(hourly_model_type)", "hourly")
 const PLOTS_DIR  = joinpath(@__DIR__, "..", "results", "plots", plots_folder)
 
 if !isdir(PLOTS_DIR)
