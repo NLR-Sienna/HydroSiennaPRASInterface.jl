@@ -16,17 +16,24 @@ scripts_dir = isfile(joinpath(@__DIR__, "hydro_dev_utils.jl")) ? (@__DIR__) : jo
 cur_dir = dirname(scripts_dir)
 model_dir = joinpath(cur_dir, "models")
 results_dir = joinpath(cur_dir, "results")
+data_dir = joinpath(cur_dir, "data")
 include(joinpath(scripts_dir, "hydro_dev_utils.jl"))
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Configuration
-# ─────────────────────────────────────────────────────────────────────────────
-med_term_model_type   = "target"   # "target" or "budget"
-save_med_term_results = true       # set false to skip CSV output for med-term
+const hydro_models_dict = Dict(
+    "Energy" => HydroEnergyModelReservoir,
+    "Water"  => HydroWaterModelReservoir,
+)
 
-# ─────────────────────────────────────────────────────────────────────────────
+# Models Configuration
+med_term_model_type = "target" # "target" or "budget"
+hourly_model_type = "target"   # "target" or "budget" 
+
+save_med_term_results = true # set false to skip CSV output for med-term
+hydro_model_type = "Water" # Energy or Water
+
+output_folder = "$(hydro_model_type)_weekly_$(med_term_model_type)_hourly_$(hourly_model_type)"
+
 # MEDIUM-TERM MODEL (weekly)
-# ─────────────────────────────────────────────────────────────────────────────
 @info "=== Building medium-term (weekly) system ==="
 
 weekly_sys = PSY.System(joinpath(model_dir, "sys_weekly.json"))
@@ -46,10 +53,23 @@ add_load_new_mean_time_series!(weekly_sys, med_term_sys, steps_mt, total_steps_m
 add_renewable_new_time_series!(weekly_sys, med_term_sys, steps_mt, total_steps_mt; renewable_type = RenewableDispatch)
 add_renewable_new_time_series!(weekly_sys, med_term_sys, steps_mt, total_steps_mt; renewable_type = RenewableNonDispatch)
 add_inflow_outflow_new_time_series!(weekly_sys, med_term_sys, steps_mt, total_steps_mt)
-add_hydro_target_new_time_series!(weekly_sys, med_term_sys, steps_mt, total_steps_mt)
+
+if med_term_model_type == "target"
+    add_hydro_target_new_time_series!(weekly_sys, med_term_sys, steps_mt, total_steps_mt)
+    weekly_target_attribute = true
+    weekly_budget_attribute = false
+elseif med_term_model_type == "budget"
+    budget_timeseries_df = CSV.read(joinpath(data_dir, "weekly_budget.csv"), DataFrame)
+    add_hydro_budget_new_time_series!(weekly_sys, med_term_sys, steps_mt, total_steps_mt, budget_timeseries_df)
+    weekly_target_attribute = false
+    weekly_budget_attribute = true
+else
+    error("Invalid med_term_model_type: $med_term_model_type")
+end
+
 add_reserves_new_time_series!(weekly_sys, med_term_sys, steps_mt, total_steps_mt)
 
-transform_single_time_series!(med_term_sys, Week(25), Week(1))
+transform_single_time_series!(med_term_sys, Week(52), Week(1))
 
 for reservoir_name in get_name.(get_components(HydroReservoir, med_term_sys))
     reservoir = get_component(HydroReservoir, med_term_sys, reservoir_name)
@@ -63,8 +83,8 @@ set_device_model!(template_mt, RenewableNonDispatch, FixedOutput)
 set_device_model!(template_mt, StandardLoad, StaticPowerLoad)
 set_device_model!(template_mt, DeviceModel(
     HydroReservoir,
-    HydroWaterModelReservoir;
-    attributes = Dict("hydro_target" => true, "hydro_budget" => false),
+    hydro_models_dict[hydro_model_type];
+    attributes = Dict("hydro_target" => weekly_target_attribute, "hydro_budget" => weekly_budget_attribute),
 ))
 set_device_model!(template_mt, HydroTurbine, HydroTurbineWaterLinearCommitment)
 set_service_model!(template_mt, ServiceModel(VariableReserve{ReserveUp}, RangeReserve; use_slacks = true))
@@ -99,41 +119,44 @@ sim_mt = Simulation(
 build!(sim_mt)
 execute!(sim_mt)
 
-results_mt    = SimulationResults(sim_mt)
+results_mt = SimulationResults(sim_mt)
 results_uc_mt = get_decision_problem_results(results_mt, "UC_MedTerm")
 
-all_variable_results_mt   = read_realized_variables(results_uc_mt)
-all_parameter_results_mt  = read_realized_parameters(results_uc_mt)
+all_variable_results_mt = read_realized_variables(results_uc_mt)
+all_parameter_results_mt = read_realized_parameters(results_uc_mt)
 
 if save_med_term_results
-    save_results_to_csv(all_variable_results_mt,  results_dir, "weekly")
-    save_results_to_csv(all_parameter_results_mt, results_dir, "weekly")
+    save_results_to_csv(all_variable_results_mt, joinpath(results_dir, output_folder, "weekly"))
+    save_results_to_csv(all_parameter_results_mt, joinpath(results_dir, output_folder, "weekly"))
 end
 
 # Extract the DataFrames we need directly from memory
-med_term_res_volume = all_variable_results_mt["HydroReservoirVolumeVariable__HydroReservoir"]
-med_term_res_head   = all_variable_results_mt["HydroReservoirHeadVariable__HydroReservoir"]
+if hydro_model_type == "Energy"
+    med_term_reservoir_energy = all_variable_results_mt["EnergyVariable__HydroReservoir"]
+elseif hydro_model_type == "Water"
+    med_term_reservoir_volume = all_variable_results_mt["HydroReservoirVolumeVariable__HydroReservoir"]
+    med_term_reservoir_head = all_variable_results_mt["HydroReservoirHeadVariable__HydroReservoir"]
+end
 
-if med_term_model_type == "hydro_target"
-    med_term_parameter = all_parameter_results_mt["WaterTargetTimeSeriesParameter__HydroReservoir"]
+if med_term_model_type == "target"
+    med_term_parameter = all_parameter_results_mt["$(hydro_model_type)TargetTimeSeriesParameter__HydroReservoir"]
 elseif med_term_model_type == "budget"
-    med_term_parameter = all_parameter_results_mt["WaterBudgetTimeSeriesParameter__HydroReservoir"]
+    med_term_parameter = all_parameter_results_mt["$(hydro_model_type)BudgetTimeSeriesParameter__HydroReservoir"]
 else
     error("Invalid med_term_model_type: $med_term_model_type")
 end
 
-# ─────────────────────────────────────────────────────────────────────────────
+#------------------------------------------------------------------------
 # SHORT-TERM MODEL (hourly)
-# ─────────────────────────────────────────────────────────────────────────────
 @info "=== Building short-term (hourly) system ==="
 
 short_term_sys = deepcopy(weekly_sys)
 remove_time_series!(short_term_sys, SingleTimeSeries)
 
-num_hours_st  = 365 * 24
-steps_st      = Hour(1) ÷ resolution_hourly   # = 1
+num_hours_st = 365 * 24
+steps_st = Hour(1) ÷ resolution_hourly   # = 1
 total_steps_st = num_hours_st * steps_st
-nums           = num_hours_st   # global used by hydro_dev_utils functions
+nums = num_hours_st   # global used by hydro_dev_utils functions
 
 set_turbine_cost_to_zero!(short_term_sys)
 add_fuel_cost_new_time_series!(weekly_sys, short_term_sys, steps_st, total_steps_st)
@@ -143,10 +166,22 @@ add_renewable_new_time_series!(weekly_sys, short_term_sys, steps_st, total_steps
 add_inflow_outflow_new_time_series!(weekly_sys, short_term_sys, steps_st, total_steps_st)
 add_reserves_new_time_series!(weekly_sys, short_term_sys, steps_st, total_steps_st)
 
-convert_hydro_targets_med_to_short(med_term_sys, short_term_sys, steps_st, total_steps_st, med_term_parameter, "hydro_target")
+if hourly_model_type == "target"
+    convert_hydro_targets_med_to_short(med_term_sys, short_term_sys, steps_st, total_steps_st, med_term_res_head, "hydro_target")
+    hourly_target_attribute = true
+    hourly_budget_attribute = false
+elseif hourly_model_type == "budget"
+    ##TODO: to implement
+    error("Hourly budget model type not implemented yet")
+    convert_hydro_budgets_med_to_short(med_term_sys, short_term_sys, steps_st, total_steps_st, med_term_parameter, "hydro_budget")
+    hourly_target_attribute = false
+    hourly_budget_attribute = true
+else
+    error("Invalid hourly_model_type: $hourly_model_type")
+end 
 
 # Transform must happen after ALL SingleTimeSeries are added
-transform_single_time_series!(short_term_sys, Hour(25), Hour(1))
+transform_single_time_series!(short_term_sys, Hour(48), Hour(24))
 
 for reservoir_name in get_name.(get_components(HydroReservoir, short_term_sys))
     reservoir = get_component(HydroReservoir, short_term_sys, reservoir_name)
@@ -160,8 +195,8 @@ set_device_model!(template_st, RenewableNonDispatch, FixedOutput)
 set_device_model!(template_st, StandardLoad, StaticPowerLoad)
 set_device_model!(template_st, DeviceModel(
     HydroReservoir,
-    HydroWaterModelReservoir;
-    attributes = Dict("hydro_target" => true, "hydro_budget" => false),
+    hydro_models_dict[hydro_model_type];
+    attributes = Dict("hydro_target" => hourly_target_attribute, "hydro_budget" => hourly_budget_attribute),
 ))
 set_device_model!(template_st, HydroTurbine, HydroTurbineWaterLinearCommitment)
 set_service_model!(template_st, ServiceModel(VariableReserve{ReserveUp}, RangeReserve; use_slacks = true))
@@ -171,19 +206,19 @@ set_available!(get_component(RenewableDispatch, short_term_sys, "Bomba135"), fal
 model_st = DecisionModel(
     template_st,
     short_term_sys;
-    name                       = "UC_ShortTerm",
-    optimizer                  = HiGHS.Optimizer,
-    store_variable_names       = true,
+    name = "UC_ShortTerm",
+    optimizer = HiGHS.Optimizer,
+    store_variable_names = true,
     optimizer_solve_log_print  = true,
-    initialize_model           = true,
-    calculate_conflict         = true,
+    initialize_model = true,
+    calculate_conflict = true,
 )
 
 models_st = SimulationModels(; decision_models = [model_st])
 
 sim_st = Simulation(
     name              = "short_term",
-    steps             = 8736,
+    steps             = 364,
     models            = models_st,
     initial_time      = DateTime("2023-01-01T00:00:00"),
     sequence          = SimulationSequence(;
@@ -196,14 +231,12 @@ sim_st = Simulation(
 build!(sim_st)
 execute!(sim_st)
 
-results_st    = SimulationResults(sim_st)
+results_st = SimulationResults(sim_st)
 results_uc_st = get_decision_problem_results(results_st, "UC_ShortTerm")
 
-all_variable_results_st  = read_realized_variables(results_uc_st)
+all_variable_results_st = read_realized_variables(results_uc_st)
 all_parameter_results_st = read_realized_parameters(results_uc_st)
 
-save_results_to_csv(all_variable_results_st,  results_dir, "hourly")
-save_results_to_csv(all_parameter_results_st, results_dir, "hourly")
+save_results_to_csv(all_variable_results_st, joinpath(results_dir, output_folder, "hourly"))
+save_results_to_csv(all_parameter_results_st, joinpath(results_dir, output_folder, "hourly"))
 
-hydro_reservoir_volume = all_variable_results_st["HydroReservoirVolumeVariable__HydroReservoir"]
-hydro_reservoir_head   = all_variable_results_st["HydroReservoirHeadVariable__HydroReservoir"]
