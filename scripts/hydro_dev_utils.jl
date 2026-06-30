@@ -365,7 +365,7 @@ function add_hydro_target_new_time_series!(sys, sys_other, steps_in_resolution, 
         res_other    = get_component(HydroReservoir, sys_other, res.name)
         ts_array     = get_time_series_array(SingleTimeSeries, res, "hydro_target"; ignore_scaling_factors = true)
         raw_tstamps  = timestamp(ts_array)
-        max_level    = get_storage_level_limits(res).max
+        max_level    = get_storage_level_limits(res).max * 380/400
 
         # Fill all steps with max_level (no repeat/slice arithmetic needed)
         vals = fill(max_level, total_steps)

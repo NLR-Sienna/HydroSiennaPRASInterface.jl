@@ -31,7 +31,7 @@ hourly_model_type = "target"   # "target" or "budget"
 save_med_term_results = true # set false to skip CSV output for med-term
 hydro_model_type = "Water" # Energy or Water
 
-output_folder = "$(hydro_model_type)_weekly_$(med_term_model_type)_hourly_$(hourly_model_type)"
+output_folder = "$(hydro_model_type)_daily_$(med_term_model_type)_hourly_$(hourly_model_type)"
 
 # MEDIUM-TERM MODEL (weekly)
 @info "=== Building medium-term (weekly) system ==="
@@ -40,12 +40,13 @@ weekly_sys = PSY.System(joinpath(model_dir, "sys_weekly.json"))
 med_term_sys = deepcopy(weekly_sys)
 remove_time_series!(med_term_sys, SingleTimeSeries)
 
-num_weeks_mt      = 104
+num_days_mt      = 365*2
 resolution_hourly = Hour(1)
-resolution_weekly = Week(1)
-steps_mt          = resolution_weekly ÷ resolution_hourly
-total_steps_mt    = num_weeks_mt * steps_mt
-nums              = num_weeks_mt   # global used by hydro_dev_utils functions
+# resolution_weekly = Week(1)
+resolution_daily  = Day(1)
+steps_mt          = resolution_daily ÷ resolution_hourly
+total_steps_mt    = num_days_mt * steps_mt
+nums              = num_days_mt   # global used by hydro_dev_utils functions
 
 set_turbine_cost_to_zero!(med_term_sys)
 add_fuel_cost_new_time_series!(weekly_sys, med_term_sys, steps_mt, total_steps_mt)
@@ -56,24 +57,29 @@ add_inflow_outflow_new_time_series!(weekly_sys, med_term_sys, steps_mt, total_st
 
 if med_term_model_type == "target"
     add_hydro_target_new_time_series!(weekly_sys, med_term_sys, steps_mt, total_steps_mt)
-    weekly_target_attribute = true
-    weekly_budget_attribute = false
+    med_term_target_attribute = true
+    med_term_budget_attribute = false
 elseif med_term_model_type == "budget"
     budget_timeseries_df = CSV.read(joinpath(data_dir, "weekly_budget.csv"), DataFrame)
     add_hydro_budget_new_time_series!(weekly_sys, med_term_sys, steps_mt, total_steps_mt, budget_timeseries_df)
-    weekly_target_attribute = false
-    weekly_budget_attribute = true
+    med_term_target_attribute = false
+    med_term_budget_attribute = true
 else
     error("Invalid med_term_model_type: $med_term_model_type")
 end
 
 add_reserves_new_time_series!(weekly_sys, med_term_sys, steps_mt, total_steps_mt)
 
-transform_single_time_series!(med_term_sys, Week(52), Week(1))
+# horizon = full year (1 solve covers all 365 days).
+# interval must be the step-between-solves that PSI uses to compute coverage;
+# Day(1) is the smallest valid interval for daily data.  With steps=1 only the
+# first (and only) window is solved, so the choice of interval doesn't affect
+# the result.
+transform_single_time_series!(med_term_sys, Day(365), Day(365))
 
 for reservoir_name in get_name.(get_components(HydroReservoir, med_term_sys))
     reservoir = get_component(HydroReservoir, med_term_sys, reservoir_name)
-    set_operation_cost!(reservoir, HydroReservoirCost(5e6, 5e6, 1.0))
+    set_operation_cost!(reservoir, HydroReservoirCost(5e6, 1e3, 1e3))
 end
 
 template_mt = ProblemTemplate(NetworkModel(CopperPlatePowerModel; use_slacks = true))
@@ -84,7 +90,7 @@ set_device_model!(template_mt, StandardLoad, StaticPowerLoad)
 set_device_model!(template_mt, DeviceModel(
     HydroReservoir,
     hydro_models_dict[hydro_model_type];
-    attributes = Dict("hydro_target" => weekly_target_attribute, "hydro_budget" => weekly_budget_attribute),
+    attributes = Dict("hydro_target" => med_term_target_attribute, "hydro_budget" => med_term_budget_attribute),
 ))
 set_device_model!(template_mt, HydroTurbine, HydroTurbineWaterLinearCommitment)
 set_service_model!(template_mt, ServiceModel(VariableReserve{ReserveUp}, RangeReserve; use_slacks = true))
@@ -106,7 +112,7 @@ models_mt = SimulationModels(; decision_models = [model_mt])
 
 sim_mt = Simulation(
     name              = "med_term",
-    steps             = 52,
+    steps             = 1,
     models            = models_mt,
     initial_time      = DateTime("2023-01-01T00:00:00"),
     sequence          = SimulationSequence(;
@@ -126,8 +132,8 @@ all_variable_results_mt = read_realized_variables(results_uc_mt)
 all_parameter_results_mt = read_realized_parameters(results_uc_mt)
 
 if save_med_term_results
-    save_results_to_csv(all_variable_results_mt, joinpath(results_dir, output_folder, "weekly"))
-    save_results_to_csv(all_parameter_results_mt, joinpath(results_dir, output_folder, "weekly"))
+    save_results_to_csv(all_variable_results_mt, joinpath(results_dir, output_folder, "daily"))
+    save_results_to_csv(all_parameter_results_mt, joinpath(results_dir, output_folder, "daily"))
 end
 
 # Extract the DataFrames we need directly from memory
@@ -135,7 +141,7 @@ if hydro_model_type == "Energy"
     med_term_reservoir_energy = all_variable_results_mt["EnergyVariable__HydroReservoir"]
 elseif hydro_model_type == "Water"
     med_term_reservoir_volume = all_variable_results_mt["HydroReservoirVolumeVariable__HydroReservoir"]
-    med_term_reservoir_head = all_variable_results_mt["HydroReservoirHeadVariable__HydroReservoir"]
+    med_term_daily_head = all_variable_results_mt["HydroReservoirHeadVariable__HydroReservoir"]
 end
 
 if med_term_model_type == "target"
@@ -167,7 +173,7 @@ add_inflow_outflow_new_time_series!(weekly_sys, short_term_sys, steps_st, total_
 add_reserves_new_time_series!(weekly_sys, short_term_sys, steps_st, total_steps_st)
 
 if hourly_model_type == "target"
-    convert_hydro_targets_med_to_short(med_term_sys, short_term_sys, steps_st, total_steps_st, med_term_res_head, "hydro_target")
+    convert_hydro_targets_med_to_short(med_term_sys, short_term_sys, steps_st, total_steps_st, med_term_daily_head, "hydro_target")
     hourly_target_attribute = true
     hourly_budget_attribute = false
 elseif hourly_model_type == "budget"
@@ -181,7 +187,10 @@ else
 end 
 
 # Transform must happen after ALL SingleTimeSeries are added
-transform_single_time_series!(short_term_sys, Hour(48), Hour(24))
+# Use a horizon of exactly 1 week (168 h) with a 1-week step so that t_end in
+# each solve is the last realized hour of the week.  The WaterTargetConstraint
+# fires at time_steps[end], which is then the actual end-of-week output.
+transform_single_time_series!(short_term_sys, Hour(24), Hour(24))
 
 for reservoir_name in get_name.(get_components(HydroReservoir, short_term_sys))
     reservoir = get_component(HydroReservoir, short_term_sys, reservoir_name)
@@ -218,7 +227,7 @@ models_st = SimulationModels(; decision_models = [model_st])
 
 sim_st = Simulation(
     name              = "short_term",
-    steps             = 364,
+    steps             = 365,  # 364 daily solves
     models            = models_st,
     initial_time      = DateTime("2023-01-01T00:00:00"),
     sequence          = SimulationSequence(;
