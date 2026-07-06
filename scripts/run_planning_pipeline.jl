@@ -25,8 +25,8 @@ const hydro_models_dict = Dict(
 )
 
 # Models Configuration
-med_term_model_type = "target" # "target" or "budget"
-hourly_model_type = "target"   # "target" or "budget" 
+med_term_model_type = "budget" # "target" or "budget"
+hourly_model_type = "budget"   # "target" or "budget" 
 
 save_med_term_results = true # set false to skip CSV output for med-term
 hydro_model_type = "Water" # Energy or Water
@@ -60,7 +60,7 @@ if med_term_model_type == "target"
     med_term_target_attribute = true
     med_term_budget_attribute = false
 elseif med_term_model_type == "budget"
-    budget_timeseries_df = CSV.read(joinpath(data_dir, "weekly_budget.csv"), DataFrame)
+    budget_timeseries_df = CSV.read(joinpath(data_dir, "daily_budget.csv"), DataFrame)
     add_hydro_budget_new_time_series!(weekly_sys, med_term_sys, steps_mt, total_steps_mt, budget_timeseries_df)
     med_term_target_attribute = false
     med_term_budget_attribute = true
@@ -148,6 +148,9 @@ if med_term_model_type == "target"
     med_term_parameter = all_parameter_results_mt["$(hydro_model_type)TargetTimeSeriesParameter__HydroReservoir"]
 elseif med_term_model_type == "budget"
     med_term_parameter = all_parameter_results_mt["$(hydro_model_type)BudgetTimeSeriesParameter__HydroReservoir"]
+    # For hierarchical budget mode: pass the OPTIMIZED reservoir volume trajectory from med-term
+    # This allows short-term to respect the daily volume profile computed by med-term optimization
+    med_term_optimized_volume = med_term_reservoir_volume
 else
     error("Invalid med_term_model_type: $med_term_model_type")
 end
@@ -177,9 +180,8 @@ if hourly_model_type == "target"
     hourly_target_attribute = true
     hourly_budget_attribute = false
 elseif hourly_model_type == "budget"
-    ##TODO: to implement
-    error("Hourly budget model type not implemented yet")
-    convert_hydro_budgets_med_to_short(med_term_sys, short_term_sys, steps_st, total_steps_st, med_term_parameter, "hydro_budget")
+    # HIERARCHICAL: Pass optimized volume trajectory from med-term (not just static input budget)
+    convert_hydro_budgets_med_to_short(med_term_sys, short_term_sys, steps_st, total_steps_st, med_term_optimized_volume, "hydro_budget")
     hourly_target_attribute = false
     hourly_budget_attribute = true
 else
@@ -248,4 +250,3 @@ all_parameter_results_st = read_realized_parameters(results_uc_st)
 
 save_results_to_csv(all_variable_results_st, joinpath(results_dir, output_folder, "hourly"))
 save_results_to_csv(all_parameter_results_st, joinpath(results_dir, output_folder, "hourly"))
-

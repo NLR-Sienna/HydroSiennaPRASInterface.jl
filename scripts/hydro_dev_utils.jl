@@ -384,20 +384,20 @@ end
 function add_hydro_budget_new_time_series!(sys, sys_other, steps_in_resolution, total_steps, budget_timeseries_df)
     nums = total_steps ÷ steps_in_resolution
 
-    weekly_ts = budget_timeseries_df[:, :DateTime]
-    new_weekly_ts  = [weekly_ts[1] + Week(i) for i in 0:(nums - 1)]
+    budget_ts = budget_timeseries_df[:, :DateTime]
+    new_budget_ts = [budget_ts[1] + Day(i) for i in 0:(nums - 1)]
 
     for res in get_components(HydroReservoir, sys)
         res_name = get_name(res)
         res_other    = get_component(HydroReservoir, sys_other, res_name)
-        weekly_vals = Float64.(budget_timeseries_df[:, res_name])
+        budget_vals = Float64.(budget_timeseries_df[:, res_name])
         
-        # Fill any remaining weeks if total_steps is not an exact multiple of steps_in_resolution
-        if length(weekly_ts) < length(new_weekly_ts)
-            weekly_vals = vcat(weekly_vals, fill(last(weekly_vals), length(new_weekly_ts) - length(weekly_ts)))
+        # Fill any remaining days if budget CSV is shorter than the planning horizon
+        if length(budget_ts) < length(new_budget_ts)
+            budget_vals = vcat(budget_vals, fill(last(budget_vals), length(new_budget_ts) - length(budget_ts)))
         end
 
-        new_array = TimeArray(new_weekly_ts, weekly_vals)
+        new_array = TimeArray(new_budget_ts, budget_vals)
         ts_new    = SingleTimeSeries(name = "hydro_budget", data = new_array)
         add_time_series!(sys_other, res_other, ts_new)
     end
@@ -453,6 +453,42 @@ function convert_hydro_targets_med_to_short(med_term_sys, short_term_sys, steps_
         if missing_steps > 0
             @info "Filling missing steps with max level for $(missing_steps) missing steps"
             short_term_res_data = vcat(short_term_res_data, fill(max_level, missing_steps))
+        end
+
+        tstamps = [first(med_tstamps) + Hour(i) for i in 0:(total_steps - 1)]
+        short_tstamps = tstamps[1:steps_in_resolution:total_steps]
+
+        new_array = TimeArray(short_tstamps, short_term_res_data)
+        ts_new    = SingleTimeSeries(name = model_type, data = new_array)
+        add_time_series!(short_term_sys, short_term_res, ts_new)
+    end
+end
+
+function convert_hydro_budgets_med_to_short(med_term_sys, short_term_sys, steps_in_resolution, total_steps, med_term_data, model_type)
+    # HIERARCHICAL BUDGET MODE: med_term_data can be either:
+    #   - Static budget parameter (for pure budget mode)
+    #   - Optimized volume trajectory from med-term (for hierarchical mode - PREFERRED)
+    # This function treats both identically: scales down by convertion_steps and repeats hourly
+    
+    nums = total_steps ÷ steps_in_resolution
+    nums_med_term = Int(size(med_term_data, 1) / length(get_components(HydroReservoir, med_term_sys)))
+    convertion_steps = nums ÷ nums_med_term
+
+    for res in get_components(HydroReservoir, med_term_sys)
+        @info "Converting budget for $(res.name) from med-term to short-term with $convertion_steps steps per med-term step"
+        short_term_res    = get_component(HydroReservoir, short_term_sys, res.name)
+        med_term_res_data = filter(row -> row.name == res.name, med_term_data)[:, :value]
+        med_tstamps  = filter(row -> row.name == res.name, med_term_data)[:, :DateTime]
+
+        # Scale budget/volume down by convertion_steps (e.g., divide daily by 24 for hourly)
+        # When this is an optimized volume, short-term will respect med-term's daily envelope
+        scaled_budget = med_term_res_data ./ convertion_steps
+        
+        short_term_res_data = repeat(scaled_budget, inner = convertion_steps)
+        missing_steps = total_steps - length(short_term_res_data)
+        if missing_steps > 0
+            @info "Filling missing steps with zero for $(missing_steps) missing steps"
+            short_term_res_data = vcat(short_term_res_data, fill(0.0, missing_steps))
         end
 
         tstamps = [first(med_tstamps) + Hour(i) for i in 0:(total_steps - 1)]
