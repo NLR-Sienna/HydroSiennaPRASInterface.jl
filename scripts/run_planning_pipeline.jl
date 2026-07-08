@@ -60,7 +60,7 @@ if med_term_model_type == "target"
     med_term_target_attribute = true
     med_term_budget_attribute = false
 elseif med_term_model_type == "budget"
-    budget_timeseries_df = CSV.read(joinpath(data_dir, "daily_budget.csv"), DataFrame)
+    budget_timeseries_df = CSV.read(joinpath(data_dir, "seasonal_budget_test.csv"), DataFrame)
     add_hydro_budget_new_time_series!(weekly_sys, med_term_sys, steps_mt, total_steps_mt, budget_timeseries_df)
     med_term_target_attribute = false
     med_term_budget_attribute = true
@@ -75,7 +75,7 @@ add_reserves_new_time_series!(weekly_sys, med_term_sys, steps_mt, total_steps_mt
 # Day(1) is the smallest valid interval for daily data.  With steps=1 only the
 # first (and only) window is solved, so the choice of interval doesn't affect
 # the result.
-transform_single_time_series!(med_term_sys, Day(365), Day(365))
+transform_single_time_series!(med_term_sys, Day(1), Day(1))
 
 for reservoir_name in get_name.(get_components(HydroReservoir, med_term_sys))
     reservoir = get_component(HydroReservoir, med_term_sys, reservoir_name)
@@ -112,7 +112,7 @@ models_mt = SimulationModels(; decision_models = [model_mt])
 
 sim_mt = Simulation(
     name              = "med_term",
-    steps             = 1,
+    steps             = 365,
     models            = models_mt,
     initial_time      = DateTime("2023-01-01T00:00:00"),
     sequence          = SimulationSequence(;
@@ -181,7 +181,20 @@ if hourly_model_type == "target"
     hourly_budget_attribute = false
 elseif hourly_model_type == "budget"
     # HIERARCHICAL: Pass optimized volume trajectory from med-term (not just static input budget)
-    convert_hydro_budgets_med_to_short(med_term_sys, short_term_sys, steps_st, total_steps_st, med_term_optimized_volume, "hydro_budget")
+    # reference_budget_data drives the scale_factor in convert_hydro_budgets_med_to_short.
+    # add_hydro_budget_new_time_series! now stores B_csv/steps_mt per daily step so the
+    # daily WaterBudgetConstraint is binding.  Multiply back by steps_mt here so the
+    # reference is in B_csv units (m³/s-steps/day), keeping scale_factor consistent.
+    med_term_parameter_ref = transform(med_term_parameter, :value => (v -> v .* steps_mt) => :value)
+    convert_hydro_budgets_med_to_short(
+        med_term_sys,
+        short_term_sys,
+        steps_st,
+        total_steps_st,
+        med_term_optimized_volume,
+        "hydro_budget";
+        reference_budget_data = med_term_parameter_ref,
+    )
     hourly_target_attribute = false
     hourly_budget_attribute = true
 else
@@ -196,7 +209,7 @@ transform_single_time_series!(short_term_sys, Hour(24), Hour(24))
 
 for reservoir_name in get_name.(get_components(HydroReservoir, short_term_sys))
     reservoir = get_component(HydroReservoir, short_term_sys, reservoir_name)
-    set_operation_cost!(reservoir, HydroReservoirCost(5e6, 5e6, 1.0))
+    set_operation_cost!(reservoir, HydroReservoirCost(5e6, 1e3, 1e3))
 end
 
 template_st = ProblemTemplate(NetworkModel(CopperPlatePowerModel; use_slacks = true))

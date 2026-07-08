@@ -308,7 +308,7 @@ function extract_hydro_inflow_from_simulation(
 
     sim = PSI.Simulation(;
         name = "hydro_planning_sim",
-        steps = 24,
+        steps = 8736, # simulate one week by default (can be adjusted based on available forecast times or system resolution)
         models = models,
         initial_time = sim_initial_time,
         sequence = sequence,
