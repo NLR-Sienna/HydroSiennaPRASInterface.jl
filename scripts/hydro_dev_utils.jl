@@ -397,7 +397,14 @@ function add_hydro_budget_new_time_series!(sys, sys_other, steps_in_resolution, 
             budget_vals = vcat(budget_vals, fill(last(budget_vals), length(new_budget_ts) - length(budget_ts)))
         end
 
-        new_array = TimeArray(new_budget_ts, budget_vals)
+        # The CSV is designed as B = Q_rate × steps_per_day (m³/s-steps/day) for a
+        # steps_in_resolution-step window.  Divide by steps_in_resolution so that PSI
+        # stores the per-step value; the WaterBudgetConstraint then sums over
+        # steps_in_resolution steps to recover the original B_csv per day.
+        # (Same scaling that convert_hydro_budgets_med_to_short applies for the hourly model.)
+        scaled_budget_vals = budget_vals ./ steps_in_resolution
+
+        new_array = TimeArray(new_budget_ts, scaled_budget_vals)
         ts_new    = SingleTimeSeries(name = "hydro_budget", data = new_array)
         add_time_series!(sys_other, res_other, ts_new)
     end
@@ -464,7 +471,7 @@ function convert_hydro_targets_med_to_short(med_term_sys, short_term_sys, steps_
     end
 end
 
-function convert_hydro_budgets_med_to_short(med_term_sys, short_term_sys, steps_in_resolution, total_steps, med_term_data, model_type)
+function convert_hydro_budgets_med_to_short(med_term_sys, short_term_sys, steps_in_resolution, total_steps, med_term_data, model_type; reference_budget_data=nothing)
     # HIERARCHICAL BUDGET MODE: med_term_data can be either:
     #   - Static budget parameter (for pure budget mode)
     #   - Optimized volume trajectory from med-term (for hierarchical mode - PREFERRED)
@@ -480,9 +487,18 @@ function convert_hydro_budgets_med_to_short(med_term_sys, short_term_sys, steps_
         med_term_res_data = filter(row -> row.name == res.name, med_term_data)[:, :value]
         med_tstamps  = filter(row -> row.name == res.name, med_term_data)[:, :DateTime]
 
-        # Scale budget/volume down by convertion_steps (e.g., divide daily by 24 for hourly)
-        # When this is an optimized volume, short-term will respect med-term's daily envelope
-        scaled_budget = med_term_res_data ./ convertion_steps
+        daily_budget_equivalent = med_term_res_data
+        if !isnothing(reference_budget_data)
+            ref_budget_res_data = filter(row -> row.name == res.name, reference_budget_data)[:, :value]
+            μ_med = mean(med_term_res_data)
+            μ_ref = mean(ref_budget_res_data)
+            scale_factor = (isfinite(μ_med) && abs(μ_med) > eps()) ? (μ_ref / μ_med) : 1.0
+            daily_budget_equivalent = max.(med_term_res_data .* scale_factor, 0.0)
+            @info "Calibrating optimized volume to budget units for $(res.name): scale_factor=$(round(scale_factor, digits=6))"
+        end
+
+        # Scale daily budget-equivalent down to hourly value replicated across the day
+        scaled_budget = daily_budget_equivalent ./ convertion_steps
         
         short_term_res_data = repeat(scaled_budget, inner = convertion_steps)
         missing_steps = total_steps - length(short_term_res_data)
