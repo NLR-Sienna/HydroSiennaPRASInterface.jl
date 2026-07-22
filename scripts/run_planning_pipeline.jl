@@ -75,11 +75,20 @@ add_reserves_new_time_series!(weekly_sys, med_term_sys, steps_mt, total_steps_mt
 # Day(1) is the smallest valid interval for daily data.  With steps=1 only the
 # first (and only) window is solved, so the choice of interval doesn't affect
 # the result.
-transform_single_time_series!(med_term_sys, Day(1), Day(1))
+if med_term_model_type == "target"
+    transform_single_time_series!(med_term_sys, Day(365), Day(365))
+elseif med_term_model_type == "budget"
+    transform_single_time_series!(med_term_sys, Day(1), Day(1))
+end
 
 for reservoir_name in get_name.(get_components(HydroReservoir, med_term_sys))
     reservoir = get_component(HydroReservoir, med_term_sys, reservoir_name)
-    set_operation_cost!(reservoir, HydroReservoirCost(5e6, 1e3, 1e3))
+    set_operation_cost!(reservoir, HydroReservoirCost(0.0, 1e3, 1e3))
+end
+
+for turbine in get_components(HydroTurbine, med_term_sys)
+    lims = get_active_power_limits(turbine)
+    set_active_power_limits!(turbine, (min = 0.0, max = lims.max))
 end
 
 template_mt = ProblemTemplate(NetworkModel(CopperPlatePowerModel; use_slacks = true))
@@ -112,7 +121,8 @@ models_mt = SimulationModels(; decision_models = [model_mt])
 
 sim_mt = Simulation(
     name              = "med_term",
-    steps             = 365,
+    steps             = if med_term_model_type == "target" 1 else 365 end,
+
     models            = models_mt,
     initial_time      = DateTime("2023-01-01T00:00:00"),
     sequence          = SimulationSequence(;
@@ -211,6 +221,8 @@ for reservoir_name in get_name.(get_components(HydroReservoir, short_term_sys))
     reservoir = get_component(HydroReservoir, short_term_sys, reservoir_name)
     set_operation_cost!(reservoir, HydroReservoirCost(5e6, 1e3, 1e3))
 end
+
+
 
 template_st = ProblemTemplate(NetworkModel(CopperPlatePowerModel; use_slacks = true))
 set_device_model!(template_st, ThermalStandard, ThermalDispatchNoMin)
