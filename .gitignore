@@ -4,6 +4,7 @@
 *.jl.mem
 deps/deps.jl
 Manifest.toml
+_*.jl
 
 # Build artifacts
 docs/build/
@@ -19,3 +20,6 @@ docs/site/
 # OS
 .DS_Store
 Thumbs.db
+
+scripts/_*.jl
+
